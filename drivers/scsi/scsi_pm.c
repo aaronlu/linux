@@ -16,17 +16,44 @@
 
 #include "scsi_priv.h"
 
-static int scsi_dev_type_suspend(struct device *dev, int (*cb)(struct device *))
+static int sdev_blk_suspend(struct scsi_device *sdev)
 {
 	int err;
 
-	err = scsi_device_quiesce(to_scsi_device(dev));
+	err = blk_pre_runtime_suspend(sdev->request_queue);
+	if (err)
+		return err;
+	err = pm_generic_runtime_suspend(&sdev->sdev_gendev);
+	blk_post_runtime_suspend(sdev->request_queue, err);
+
+	return err;
+}
+
+static int sdev_blk_resume(struct scsi_device *sdev)
+{
+	int err;
+
+	blk_pre_runtime_resume(sdev->request_queue);
+	err = pm_generic_runtime_resume(&sdev->sdev_gendev);
+	blk_post_runtime_resume(sdev->request_queue, err);
+
+	return err;
+}
+
+static int scsi_dev_type_suspend(struct device *dev, int (*cb)(struct device *))
+{
+	struct scsi_device *sdev = to_scsi_device(dev);
+	int err;
+
+	err = scsi_device_quiesce(sdev);
 	if (err == 0) {
-		if (cb) {
+		if (sdev->request_queue->dev)
+			err = sdev_blk_suspend(sdev);
+		else if (cb)
 			err = cb(dev);
-			if (err)
-				scsi_device_resume(to_scsi_device(dev));
-		}
+
+		if (err)
+			scsi_device_resume(sdev);
 	}
 	dev_dbg(dev, "scsi suspend: %d\n", err);
 	return err;
@@ -34,11 +61,14 @@ static int scsi_dev_type_suspend(struct device *dev, int (*cb)(struct device *))
 
 static int scsi_dev_type_resume(struct device *dev, int (*cb)(struct device *))
 {
+	struct scsi_device *sdev = to_scsi_device(dev);
 	int err = 0;
 
-	if (cb)
+	if (sdev->request_queue->dev)
+		err = sdev_blk_resume(sdev);
+	else if (cb)
 		err = cb(dev);
-	scsi_device_resume(to_scsi_device(dev));
+	scsi_device_resume(sdev);
 	dev_dbg(dev, "scsi resume: %d\n", err);
 	return err;
 }
@@ -185,10 +215,18 @@ static int scsi_runtime_idle(struct device *dev)
 
 	/* Insert hooks here for targets, hosts, and transport classes */
 
-	if (scsi_is_sdev_device(dev))
-		err = pm_schedule_suspend(dev, 100);
-	else
+	if (scsi_is_sdev_device(dev)) {
+		struct scsi_device *sdev = to_scsi_device(dev);
+
+		if (sdev->request_queue->dev) {
+			pm_runtime_mark_last_busy(dev);
+			err = pm_runtime_autosuspend(dev);
+		} else {
+			err = pm_schedule_suspend(dev, 100);
+		}
+	} else {
 		err = pm_runtime_suspend(dev);
+	}
 	return err;
 }
 
