@@ -127,13 +127,21 @@ static int scsi_bus_prepare(struct device *dev)
 static int scsi_bus_suspend(struct device *dev)
 {
 	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
-	return scsi_bus_suspend_common(dev, pm ? pm->suspend : NULL);
+	int ret;
+
+	ret = scsi_bus_suspend_common(dev, pm ? pm->suspend : NULL);
+	if (!ret) {
+		__pm_runtime_disable(dev, false);
+		pm_runtime_set_suspended(dev);
+		pm_runtime_enable(dev);
+	}
+
+	return ret;
 }
 
 static int scsi_bus_resume(struct device *dev)
 {
-	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
-	return scsi_bus_resume_common(dev, pm ? pm->resume : NULL);
+	return 0;
 }
 
 static int scsi_bus_freeze(struct device *dev)

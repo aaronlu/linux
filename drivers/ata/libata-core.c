@@ -5355,10 +5355,19 @@ static int ata_port_suspend_common(struct device *dev, pm_message_t mesg)
 
 static int ata_port_suspend(struct device *dev)
 {
+	int ret;
+
 	if (pm_runtime_suspended(dev))
 		return 0;
 
-	return ata_port_suspend_common(dev, PMSG_SUSPEND);
+	ret = ata_port_suspend_common(dev, PMSG_SUSPEND);
+	if (!ret) {
+		__pm_runtime_disable(dev, false);
+		pm_runtime_set_suspended(dev);
+		pm_runtime_enable(dev);
+	}
+
+	return ret;
 }
 
 static int ata_port_do_freeze(struct device *dev)
@@ -5393,16 +5402,7 @@ static int ata_port_resume_common(struct device *dev, pm_message_t mesg)
 
 static int ata_port_resume(struct device *dev)
 {
-	int rc;
-
-	rc = ata_port_resume_common(dev, PMSG_RESUME);
-	if (!rc) {
-		pm_runtime_disable(dev);
-		pm_runtime_set_active(dev);
-		pm_runtime_enable(dev);
-	}
-
-	return rc;
+	return 0;
 }
 
 /*
