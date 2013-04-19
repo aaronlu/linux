@@ -237,6 +237,7 @@ static int acpi_video_get_brightness(struct backlight_device *bd)
 	struct acpi_video_device *vd =
 		(struct acpi_video_device *)bl_get_data(bd);
 
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "query from %s\n", current->comm));
 	if (acpi_video_device_lcd_get_level_current(vd, &cur_level, false))
 		return -EINVAL;
 	for (i = 2; i < vd->brightness->count; i++) {
@@ -253,6 +254,10 @@ static int acpi_video_set_brightness(struct backlight_device *bd)
 	int request_level = bd->props.brightness + 2;
 	struct acpi_video_device *vd =
 		(struct acpi_video_device *)bl_get_data(bd);
+
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "request_level %d for %s by %s\n",
+				bd->props.brightness, dev_name(&bd->dev),
+				current->comm));
 
 	return acpi_video_device_lcd_set_level(vd,
 				vd->brightness->levels[request_level]);
@@ -357,6 +362,10 @@ acpi_video_device_lcd_set_level(struct acpi_video_device *device, int level)
 	struct acpi_object_list args = { 1, &arg0 };
 	int state;
 
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "set level %d for device %s.%s ->%s\n",
+				level, acpi_device_bid(device->dev->parent),
+				acpi_device_bid(device->dev), current->comm));
+
 	arg0.integer.value = level;
 
 	status = acpi_evaluate_object(device->dev->handle, "_BCM",
@@ -374,7 +383,7 @@ acpi_video_device_lcd_set_level(struct acpi_video_device *device, int level)
 			return 0;
 		}
 
-	ACPI_ERROR((AE_INFO, "Current brightness invalid"));
+	ACPI_ERROR((AE_INFO, "Set level %d doesn't exist in _BCL list\n", level));
 	return -EINVAL;
 }
 
@@ -491,12 +500,16 @@ acpi_video_device_lcd_get_level_current(struct acpi_video_device *device,
 	acpi_status status = AE_OK;
 	int i;
 
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "from %s\n", current->comm));
+
 	if (device->cap._BQC || device->cap._BCQ) {
 		char *buf = device->cap._BQC ? "_BQC" : "_BCQ";
 
 		status = acpi_evaluate_integer(device->dev->handle, buf,
 						NULL, level);
 		if (ACPI_SUCCESS(status)) {
+			ACPI_DEBUG_PRINT((ACPI_DB_INFO, "raw bqc=%d\n",
+						(int)*level));
 			if (raw) {
 				/*
 				 * Caller has indicated he wants the raw
@@ -507,6 +520,8 @@ acpi_video_device_lcd_get_level_current(struct acpi_video_device *device,
 			}
 
 			*level = acpi_video_bqc_value_to_level(device, *level);
+			ACPI_DEBUG_PRINT((ACPI_DB_INFO, "translated to %d\n",
+						(int)*level));
 
 			for (i = 2; i < device->brightness->count; i++)
 				if (device->brightness->levels[i] == *level) {
@@ -674,17 +689,25 @@ static int acpi_video_bqc_quirk(struct acpi_video_device *device,
 	if (result)
 		return result;
 
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "test_level=%d, returned_level=%d\n",
+				test_level, (int)level));
+
 	if (level != test_level) {
 		/* buggy _BQC found, need to find out if it uses index */
 		if (level < br->count - 2) {
 			if (br->flags._BCL_reversed)
 				level = br->count - 3 - level;
-			if (br->levels[level + 2] == test_level)
+			if (br->levels[level + 2] == test_level) {
 				br->flags._BQC_use_index = 1;
+				ACPI_DEBUG_PRINT((ACPI_DB_INFO,
+							"bqc uses index\n"));
+			}
 		}
 clear_bqc:
-		if (!br->flags._BQC_use_index)
+		if (!br->flags._BQC_use_index) {
 			device->cap._BQC = device->cap._BCQ = 0;
+			ACPI_DEBUG_PRINT((ACPI_DB_INFO, "clear bqc cap\n"));
+		}
 	}
 
 	return 0;
@@ -741,11 +764,14 @@ acpi_video_init_brightness(struct acpi_video_device *device)
 			continue;
 		}
 		br->levels[count] = (u32) o->integer.value;
+		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "index=%d, level=%d\n", count,
+					br->levels[count]));
 
 		if (br->levels[count] > max_level)
 			max_level = br->levels[count];
 		count++;
 	}
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "max_level=%d\n", max_level));
 
 	/*
 	 * some buggy BIOS don't export the levels
@@ -801,6 +827,9 @@ acpi_video_init_brightness(struct acpi_video_device *device)
 							 &level_old, true);
 	if (result)
 		goto out_free_levels;
+
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "initial backlight level is %d\n",
+				(int)level_old));
 
 	result = acpi_video_bqc_quirk(device, level_old);
 	if (result)
@@ -1348,8 +1377,11 @@ acpi_video_switch_brightness(struct acpi_video_device *device, int event)
 							 false);
 	if (result)
 		goto out;
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "level_current=%d\n",
+				(int)level_current));
 
 	level_next = acpi_video_get_next_level(device, level_current, event);
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "level_next=%d\n", (int)level_next));
 
 	result = acpi_video_device_lcd_set_level(device, level_next);
 
