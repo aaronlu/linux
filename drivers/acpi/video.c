@@ -640,22 +640,31 @@ acpi_video_cmp_level(const void *a, const void *b)
  * index. If not, clear the _BQC/_BCQ capability.
  */
 static int acpi_video_bqc_quirk(struct acpi_video_device *device,
-				int max_level, int current_level)
+				int current_level)
 {
 	struct acpi_video_device_brightness *br = device->brightness;
 	int result;
 	unsigned long long level;
-	int test_level;
+	int test_level, i;
 
 	/* don't mess with existing known broken systems */
 	if (bqc_offset_aml_bug_workaround)
 		return 0;
 
 	/*
-	 * Some systems always report current brightness level as maximum
-	 * through _BQC, we need to test another value for them.
+	 * Choose a test level that is not the same as the current_level
+	 * from the br->levels array. Also, avoid choosing an edge value,
+	 * i.e. max or min levels, as some broken _BQC returns correct
+	 * value for edge value.
 	 */
-	test_level = current_level == max_level ? br->levels[2] : max_level;
+	for (test_level = -1, i = br->count - 2; i > 2; i--) {
+		if (br->levels[i] != current_level) {
+			test_level = br->levels[i];
+			break;
+		}
+	}
+	if (test_level == -1)
+		goto clear_bqc;
 
 	result = acpi_video_device_lcd_set_level(device, test_level);
 	if (result)
@@ -667,13 +676,13 @@ static int acpi_video_bqc_quirk(struct acpi_video_device *device,
 
 	if (level != test_level) {
 		/* buggy _BQC found, need to find out if it uses index */
-		if (level < br->count) {
+		if (level < br->count - 2) {
 			if (br->flags._BCL_reversed)
 				level = br->count - 3 - level;
 			if (br->levels[level + 2] == test_level)
 				br->flags._BQC_use_index = 1;
 		}
-
+clear_bqc:
 		if (!br->flags._BQC_use_index)
 			device->cap._BQC = device->cap._BCQ = 0;
 	}
@@ -793,7 +802,7 @@ acpi_video_init_brightness(struct acpi_video_device *device)
 	if (result)
 		goto out_free_levels;
 
-	result = acpi_video_bqc_quirk(device, max_level, level_old);
+	result = acpi_video_bqc_quirk(device, level_old);
 	if (result)
 		goto out_free_levels;
 	/*
