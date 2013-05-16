@@ -43,8 +43,6 @@ static int scsi_dev_type_resume(struct device *dev, int (*cb)(struct device *))
 	return err;
 }
 
-#ifdef CONFIG_PM_SLEEP
-
 static int
 scsi_bus_suspend_common(struct device *dev, int (*cb)(struct device *))
 {
@@ -129,20 +127,6 @@ static int scsi_bus_restore(struct device *dev)
 	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
 	return scsi_bus_resume_common(dev, pm ? pm->restore : NULL);
 }
-
-#else /* CONFIG_PM_SLEEP */
-
-#define scsi_bus_prepare		NULL
-#define scsi_bus_suspend		NULL
-#define scsi_bus_resume			NULL
-#define scsi_bus_freeze			NULL
-#define scsi_bus_thaw			NULL
-#define scsi_bus_poweroff		NULL
-#define scsi_bus_restore		NULL
-
-#endif /* CONFIG_PM_SLEEP */
-
-#ifdef CONFIG_PM_RUNTIME
 
 static int sdev_blk_runtime_suspend(struct scsi_device *sdev,
 					int (*cb)(struct device *))
@@ -295,14 +279,6 @@ void scsi_autopm_put_host(struct Scsi_Host *shost)
 {
 	pm_runtime_put_sync(&shost->shost_gendev);
 }
-
-#else
-
-#define scsi_runtime_suspend	NULL
-#define scsi_runtime_resume	NULL
-#define scsi_runtime_idle	NULL
-
-#endif /* CONFIG_PM_RUNTIME */
 
 const struct dev_pm_ops scsi_bus_pm_ops = {
 	.prepare =		scsi_bus_prepare,
