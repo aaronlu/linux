@@ -5359,10 +5359,19 @@ static int ata_port_suspend_common(struct device *dev, pm_message_t mesg)
 
 static int ata_port_suspend(struct device *dev)
 {
+	int ret;
+
 	if (pm_runtime_suspended(dev))
 		return 0;
 
-	return ata_port_suspend_common(dev, PMSG_SUSPEND);
+	ret = ata_port_suspend_common(dev, PMSG_SUSPEND);
+	if (!ret) {
+		__pm_runtime_disable(dev, false);
+		pm_runtime_set_suspended(dev);
+		pm_runtime_enable(dev);
+	}
+
+	return ret;
 }
 
 static int ata_port_do_freeze(struct device *dev)
@@ -5409,6 +5418,11 @@ static int ata_port_resume(struct device *dev)
 	return rc;
 }
 
+static int ata_port_fast_resume(struct device *dev)
+{
+	return pm_request_resume(dev);
+}
+
 /*
  * For ODDs, the upper layer will poll for media change every few seconds,
  * which will make it enter and leave suspend state every few seconds. And
@@ -5445,7 +5459,7 @@ static int ata_port_runtime_resume(struct device *dev)
 
 static const struct dev_pm_ops ata_port_pm_ops = {
 	.suspend = ata_port_suspend,
-	.resume = ata_port_resume,
+	.resume = ata_port_fast_resume,
 	.freeze = ata_port_do_freeze,
 	.thaw = ata_port_resume,
 	.poweroff = ata_port_poweroff,
