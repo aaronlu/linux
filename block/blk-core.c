@@ -3058,6 +3058,7 @@ void blk_pm_runtime_init(struct request_queue *q, struct device *dev)
 	q->rpm_status = RPM_ACTIVE;
 	pm_runtime_set_autosuspend_delay(q->dev, -1);
 	pm_runtime_use_autosuspend(q->dev);
+	dev_info(dev, "%s: nr_pending=%d\n", __func__, q->nr_pending);
 }
 EXPORT_SYMBOL(blk_pm_runtime_init);
 

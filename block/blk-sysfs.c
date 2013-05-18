@@ -97,6 +97,11 @@ queue_requests_store(struct request_queue *q, const char *page, size_t count)
 	return ret;
 }
 
+static ssize_t queue_pending_show(struct request_queue *q, char *page)
+{
+	return queue_var_show(q->nr_pending, (page));
+}
+
 static ssize_t queue_ra_show(struct request_queue *q, char *page)
 {
 	unsigned long ra_kb = q->backing_dev_info.ra_pages <<
@@ -316,6 +321,11 @@ static struct queue_sysfs_entry queue_requests_entry = {
 	.store = queue_requests_store,
 };
 
+static struct queue_sysfs_entry queue_pending_entry = {
+	.attr = {.name = "nr_pending", .mode = S_IRUGO },
+	.show = queue_pending_show,
+};
+
 static struct queue_sysfs_entry queue_ra_entry = {
 	.attr = {.name = "read_ahead_kb", .mode = S_IRUGO | S_IWUSR },
 	.show = queue_ra_show,
@@ -431,6 +441,7 @@ static struct queue_sysfs_entry queue_random_entry = {
 
 static struct attribute *default_attrs[] = {
 	&queue_requests_entry.attr,
+	&queue_pending_entry.attr,
 	&queue_ra_entry.attr,
 	&queue_max_hw_sectors_entry.attr,
 	&queue_max_sectors_entry.attr,
