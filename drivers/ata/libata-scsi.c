@@ -3742,6 +3742,25 @@ int ata_scsi_offline_dev(struct ata_device *dev)
 	return 0;
 }
 
+int ata_scsi_transport_offline_dev(struct ata_device *dev)
+{
+	if (dev->sdev) {
+		dev->sdev->sdev_saved_state = dev->sdev->sdev_state;
+		scsi_device_set_state(dev->sdev, SDEV_TRANSPORT_OFFLINE);
+		return 1;
+	}
+	return 0;
+}
+
+int ata_scsi_transport_restore_dev(struct ata_device *dev)
+{
+	if (dev->sdev) {
+		scsi_device_set_state(dev->sdev, dev->sdev->sdev_saved_state);
+		return 1;
+	}
+	return 0;
+}
+
 /**
  *	ata_scsi_remove_dev - remove attached SCSI device
  *	@dev: ATA device to remove attached SCSI device for

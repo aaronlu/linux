@@ -4066,9 +4066,11 @@ static void ata_eh_handle_port_suspend(struct ata_port *ap)
 	spin_lock_irqsave(ap->lock, flags);
 
 	ap->pflags &= ~ATA_PFLAG_PM_PENDING;
-	if (rc == 0)
+	if (rc == 0) {
 		ap->pflags |= ATA_PFLAG_SUSPENDED;
-	else if (ap->pflags & ATA_PFLAG_FROZEN)
+		ata_for_each_dev(dev, &ap->link, ENABLED)
+			ata_scsi_transport_offline_dev(dev);
+	} else if (ap->pflags & ATA_PFLAG_FROZEN)
 		ata_port_schedule_eh(ap);
 
 	if (ap->pm_result) {
@@ -4133,6 +4135,10 @@ static void ata_eh_handle_port_resume(struct ata_port *ap)
 	if (ap->pm_result) {
 		*ap->pm_result = rc;
 		ap->pm_result = NULL;
+	}
+	if (rc == 0) {
+		ata_for_each_dev(dev, &ap->link, ENABLED)
+			ata_scsi_transport_restore_dev(dev);
 	}
 	spin_unlock_irqrestore(ap->lock, flags);
 }
