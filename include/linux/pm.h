@@ -530,9 +530,12 @@ struct dev_pm_info {
 	struct wakeup_source	*wakeup;
 	bool			wakeup_path:1;
 	bool			syscore:1;
+#ifdef CONFIG_PM_RUNTIME
+	bool			skip_resume:1;
+#endif
 #else
 	unsigned int		should_wakeup:1;
-#endif
+#endif /* CONFIG_PM_SLEEP */
 #ifdef CONFIG_PM_RUNTIME
 	struct timer_list	suspend_timer;
 	unsigned long		timer_expires;
@@ -559,7 +562,7 @@ struct dev_pm_info {
 	unsigned long		active_jiffies;
 	unsigned long		suspended_jiffies;
 	unsigned long		accounting_timestamp;
-#endif
+#endif /* CONFIG_PM_RUNTIME */
 	struct pm_subsys_data	*subsys_data;  /* Owned by the subsystem. */
 	struct dev_pm_qos	*qos;
 };
@@ -713,5 +716,11 @@ enum dpm_order {
 	DPM_ORDER_PARENT_BEFORE_DEV,
 	DPM_ORDER_DEV_LAST,
 };
+
+#if defined(CONFIG_PM_RUNTIME) && defined(CONFIG_PM_SLEEP)
+void device_pm_skip_resume(struct device *dev, bool enable);
+#else
+static inline void device_pm_skip_resume(struct device *dev, bool enable) {}
+#endif /* CONFIG_PM_RUNTIME && CONFIG_PM_SLEEP */
 
 #endif /* _LINUX_PM_H */
