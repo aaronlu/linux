@@ -295,6 +295,7 @@ int ata_tport_add(struct device *parent,
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
 	pm_runtime_forbid(dev);
+	device_pm_skip_resume(dev, true);
 
 	transport_add_device(dev);
 	transport_configure_device(dev);
