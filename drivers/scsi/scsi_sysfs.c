@@ -849,6 +849,7 @@ static int scsi_target_add(struct scsi_target *starget)
 	pm_runtime_set_active(&starget->dev);
 	pm_runtime_enable(&starget->dev);
 	device_enable_async_suspend(&starget->dev);
+	device_pm_skip_resume(&starget->dev, true);
 
 	return 0;
 }
@@ -886,6 +887,7 @@ int scsi_sysfs_add_sdev(struct scsi_device *sdev)
 	pm_runtime_forbid(&sdev->sdev_gendev);
 	pm_runtime_enable(&sdev->sdev_gendev);
 	scsi_autopm_put_target(starget);
+	device_pm_skip_resume(&sdev->sdev_gendev, true);
 
 	/* The following call will keep sdev active indefinitely, until
 	 * its driver does a corresponding scsi_autopm_pm_device().  Only

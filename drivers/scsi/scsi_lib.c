@@ -2392,6 +2392,17 @@ void scsi_device_resume(struct scsi_device *sdev)
 }
 EXPORT_SYMBOL(scsi_device_resume);
 
+#ifdef CONFIG_PM_RUNTIME
+void scsi_device_drain_queue(struct scsi_device *sdev)
+{
+	scsi_run_queue(sdev->request_queue);
+	while (sdev->request_queue->nr_pending) {
+		msleep_interruptible(200);
+		scsi_run_queue(sdev->request_queue);
+	}
+}
+#endif
+
 static void
 device_quiesce_fn(struct scsi_device *sdev, void *data)
 {

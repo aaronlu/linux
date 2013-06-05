@@ -88,6 +88,11 @@ extern void scsi_run_host_queues(struct Scsi_Host *shost);
 extern struct request_queue *scsi_alloc_queue(struct scsi_device *sdev);
 extern int scsi_init_queue(void);
 extern void scsi_exit_queue(void);
+#ifdef CONFIG_PM_RUNTIME
+extern void scsi_device_drain_queue(struct scsi_device *sdev);
+#else
+static inline void scsi_device_drain_queue(struct scsi_device *sdev) {}
+#endif
 struct request_queue;
 struct request;
 extern struct kmem_cache *scsi_sdb_cache;

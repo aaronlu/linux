@@ -43,6 +43,26 @@ static int scsi_dev_type_resume(struct device *dev, int (*cb)(struct device *))
 	return err;
 }
 
+#ifdef CONFIG_PM_RUNTIME
+
+static int sdev_blk_suspend_common(struct device *dev,
+					int (*cb)(struct device *))
+{
+	struct scsi_device *sdev = to_scsi_device(dev);
+	int err;
+
+	err = blk_pre_runtime_suspend(sdev->request_queue);
+	if (err)
+		return err;
+	if (cb)
+		err = cb(dev);
+	blk_post_runtime_suspend(sdev->request_queue, err);
+
+	return err;
+}
+
+#endif
+
 #ifdef CONFIG_PM_SLEEP
 
 static int
@@ -94,10 +114,30 @@ static int scsi_bus_prepare(struct device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_RUNTIME
+static int sdev_blk_system_suspend(struct device *dev,
+					int (*cb)(struct device *))
+{
+	scsi_device_drain_queue(to_scsi_device(dev));
+	return sdev_blk_suspend_common(dev, cb);
+}
+#else
+static int sdev_blk_system_suspend(struct device *dev,
+					int (*cb)(struct device *))
+{
+	return 0;
+}
+#endif
+
 static int scsi_bus_suspend(struct device *dev)
 {
 	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
-	return scsi_bus_suspend_common(dev, pm ? pm->suspend : NULL);
+	int (*cb)(struct device *) = pm ? pm->suspend : NULL;
+
+	if (dev->bus->pm->runtime_suspend && scsi_is_sdev_device(dev))
+		return sdev_blk_system_suspend(dev, cb);
+	else
+		return scsi_bus_suspend_common(dev, cb);
 }
 
 static int scsi_bus_resume(struct device *dev)
@@ -144,27 +184,19 @@ static int scsi_bus_restore(struct device *dev)
 
 #ifdef CONFIG_PM_RUNTIME
 
-static int sdev_runtime_suspend(struct device *dev)
-{
-	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
-	struct scsi_device *sdev = to_scsi_device(dev);
-	int err;
-
-	err = blk_pre_runtime_suspend(sdev->request_queue);
-	if (err)
-		return err;
-	if (pm && pm->runtime_suspend)
-		err = pm->runtime_suspend(dev);
-	blk_post_runtime_suspend(sdev->request_queue, err);
-}
-
 static int scsi_runtime_suspend(struct device *dev)
 {
 	int err = 0;
+	int (*cb)(struct device *);
 
 	dev_dbg(dev, "scsi_runtime_suspend\n");
-	if (scsi_is_sdev_device(dev))
-		err = sdev_runtime_suspend(dev);
+	if (scsi_is_sdev_device(dev)) {
+		if (dev->driver && dev->driver->pm)
+			cb = dev->driver->pm->runtime_suspend;
+		else
+			cb = NULL;
+		err = sdev_blk_suspend_common(dev, cb);
+	}
 
 	/* Insert hooks here for targets, hosts, and transport classes */
 
