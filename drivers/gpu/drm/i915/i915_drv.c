@@ -154,6 +154,11 @@ module_param_named(prefault_disable, i915_prefault_disable, bool, 0600);
 MODULE_PARM_DESC(prefault_disable,
 		"Disable page prefaulting for pread/pwrite/reloc (default:false). For developers only.");
 
+bool i915_take_over_backlight = false;
+module_param_named(take_over_backlight, i915_take_over_backlight, bool, 0644);
+MODULE_PARM_DESC(take_over_backlight,
+		"Prevent ACPI backlight from being used (default: false)");
+
 static struct drm_driver driver;
 extern int intel_agp_enabled;
 

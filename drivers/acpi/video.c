@@ -1256,8 +1256,8 @@ acpi_video_switch_brightness(struct acpi_video_device *device, int event)
 	unsigned long long level_current, level_next;
 	int result = -EINVAL;
 
-	/* no warning message if acpi_backlight=vendor is used */
-	if (!acpi_video_backlight_support())
+	/* no warning message if acpi_backlight=vendor or a quirk is used */
+	if (!acpi_video_verify_backlight_support())
 		return 0;
 
 	if (!device->brightness)
@@ -1558,7 +1558,7 @@ acpi_video_bus_match(acpi_handle handle, u32 level, void *context,
 
 static void acpi_video_dev_register_backlight(struct acpi_video_device *device)
 {
-	if (acpi_video_backlight_support()) {
+	if (acpi_video_verify_backlight_support()) {
 		struct backlight_properties props;
 		struct pci_dev *pdev;
 		acpi_handle acpi_parent;
@@ -1933,14 +1933,22 @@ static int __init intel_opregion_present(void)
 	return opregion;
 }
 
-int acpi_video_register(void)
+int __acpi_video_register(bool backlight_quirks)
 {
-	int result = 0;
+	bool no_backlight;
+	int result;
+
+	no_backlight = backlight_quirks ? acpi_video_backlight_quirks() : false;
+
 	if (register_count) {
 		/*
-		 * if the function of acpi_video_register is already called,
-		 * don't register the acpi_vide_bus again and return no error.
+		 * If acpi_video_register() has been called already, don't try
+		 * to register acpi_video_bus, but unregister backlight devices
+		 * if no backlight support is requested.
 		 */
+		if (no_backlight)
+			acpi_video_unregister_backlight();
+
 		return 0;
 	}
 
@@ -1959,7 +1967,7 @@ int acpi_video_register(void)
 
 	return 0;
 }
-EXPORT_SYMBOL(acpi_video_register);
+EXPORT_SYMBOL(__acpi_video_register);
 
 void acpi_video_unregister(void)
 {
