@@ -279,9 +279,6 @@ static int acpi_dump_SDT(int fd, struct acpi_rsdp_descriptor *rsdp)
 	int xsdt = 1, i, num;
 	char *offset;
 	unsigned long addr;
-	if (rsdp->revision > 1 && rsdp->xsdt_physical_address) {
-		tbl = acpi_map_table(rsdp->xsdt_physical_address, "XSDT");
-	}
 	if (!tbl && rsdp->rsdt_physical_address) {
 		xsdt = 0;
 		tbl = acpi_map_table(rsdp->rsdt_physical_address, "RSDT");
