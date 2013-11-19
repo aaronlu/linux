@@ -302,15 +302,10 @@ int acpi_device_fix_up_power(struct acpi_device *device)
 	return ret;
 }
 
-int acpi_bus_update_power(acpi_handle handle, int *state_p)
+int acpi_device_update_power(struct acpi_device *device, int *state_p)
 {
-	struct acpi_device *device;
-	int state;
 	int result;
-
-	result = acpi_bus_get_device(handle, &device);
-	if (result)
-		return result;
+	int state;
 
 	result = acpi_device_get_power(device, &state);
 	if (result)
@@ -337,6 +332,20 @@ int acpi_bus_update_power(acpi_handle handle, int *state_p)
 		*state_p = state;
 
 	return 0;
+
+}
+EXPORT_SYMBOL_GPL(acpi_device_update_power);
+
+int acpi_bus_update_power(acpi_handle handle, int *state_p)
+{
+	struct acpi_device *device;
+	int result;
+
+	result = acpi_bus_get_device(handle, &device);
+	if (result)
+		return result;
+
+	return acpi_device_update_power(device, state_p);
 }
 EXPORT_SYMBOL_GPL(acpi_bus_update_power);
 
