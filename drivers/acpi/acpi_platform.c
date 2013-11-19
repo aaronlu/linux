@@ -37,6 +37,9 @@ static const struct acpi_device_id acpi_platform_device_ids[] = {
 	{ "INT33C8" },
 	{ "80860F28" },
 
+	/* ACPI fan device */
+	{ "PNP0C0B" },
+
 	{ }
 };
 
