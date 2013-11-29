@@ -832,21 +832,23 @@ void ata_acpi_on_resume(struct ata_port *ap)
 		 * use values set by _STM.  Cache _GTF result and
 		 * schedule _GTF.
 		 */
-		ata_for_each_dev(dev, &ap->link, ALL) {
-			ata_acpi_clear_gtf(dev);
-			if (ata_dev_enabled(dev) &&
-			    ata_dev_get_GTF(dev, NULL) >= 0)
-				dev->flags |= ATA_DFLAG_ACPI_PENDING;
+		ata_for_each_dev(dev, &ap->link, ENABLED) {
+			if (ata_dev_acpi_handle(dev)) {
+				ata_acpi_clear_gtf(dev);
+				if (ata_dev_get_GTF(dev, NULL) >= 0)
+					dev->flags |= ATA_DFLAG_ACPI_PENDING;
+			}
 		}
 	} else {
 		/* SATA _GTF needs to be evaulated after _SDD and
 		 * there's no reason to evaluate IDE _GTF early
 		 * without _STM.  Clear cache and schedule _GTF.
 		 */
-		ata_for_each_dev(dev, &ap->link, ALL) {
-			ata_acpi_clear_gtf(dev);
-			if (ata_dev_enabled(dev))
+		ata_for_each_dev(dev, &ap->link, ENABLED) {
+			if (ata_dev_acpi_handle(dev)) {
+				ata_acpi_clear_gtf(dev);
 				dev->flags |= ATA_DFLAG_ACPI_PENDING;
+			}
 		}
 	}
 }
