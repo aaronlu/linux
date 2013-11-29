@@ -252,19 +252,6 @@ static void zpodd_wake_dev(acpi_handle handle, u32 event, void *context)
 	}
 }
 
-static void ata_acpi_add_pm_notifier(struct ata_device *dev)
-{
-	acpi_handle handle = ata_dev_acpi_handle(dev);
-	acpi_install_notify_handler(handle, ACPI_SYSTEM_NOTIFY,
-				    zpodd_wake_dev, dev);
-}
-
-static void ata_acpi_remove_pm_notifier(struct ata_device *dev)
-{
-	acpi_handle handle = ata_dev_acpi_handle(dev);
-	acpi_remove_notify_handler(handle, ACPI_SYSTEM_NOTIFY, zpodd_wake_dev);
-}
-
 void zpodd_init(struct ata_device *dev)
 {
 	enum odd_mech_type mech_type;
@@ -286,7 +273,8 @@ void zpodd_init(struct ata_device *dev)
 
 	zpodd->mech_type = mech_type;
 
-	ata_acpi_add_pm_notifier(dev);
+	acpi_install_notify_handler(ACPI_HANDLE(&dev->tdev), ACPI_SYSTEM_NOTIFY,
+				    zpodd_wake_dev, dev);
 	zpodd->dev = dev;
 	dev->zpodd = zpodd;
 	dev_pm_qos_expose_flags(&dev->tdev, 0);
@@ -294,7 +282,8 @@ void zpodd_init(struct ata_device *dev)
 
 void zpodd_exit(struct ata_device *dev)
 {
-	ata_acpi_remove_pm_notifier(dev);
+	acpi_remove_notify_handler(ACPI_HANDLE(&dev->tdev), ACPI_SYSTEM_NOTIFY,
+				   zpodd_wake_dev);
 	kfree(dev->zpodd);
 	dev->zpodd = NULL;
 }

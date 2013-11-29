@@ -222,7 +222,7 @@ void ata_acpi_bind_dev(struct ata_device *dev)
 
 	acpi_preset_companion(&dev->tdev, parent, adr);
 
-	register_hotplug_dock_device(ata_dev_acpi_handle(dev),
+	register_hotplug_dock_device(ACPI_HANDLE(&dev->tdev),
 				     &ata_acpi_dev_dock_ops, dev, NULL, NULL);
 }
 
@@ -404,7 +404,7 @@ static int ata_dev_get_GTF(struct ata_device *dev, struct ata_acpi_gtf **gtf)
 			    __func__, ap->port_no);
 
 	/* _GTF has no input parameters */
-	status = acpi_evaluate_object(ata_dev_acpi_handle(dev), "_GTF", NULL,
+	status = acpi_evaluate_object(ACPI_HANDLE(&dev->tdev), "_GTF", NULL,
 				      &output);
 	out_obj = dev->gtf_cache = output.pointer;
 
@@ -771,7 +771,7 @@ static int ata_acpi_push_id(struct ata_device *dev)
 
 	/* It's OK for _SDD to be missing too. */
 	swap_buf_le16(dev->id, ATA_ID_WORDS);
-	status = acpi_evaluate_object(ata_dev_acpi_handle(dev), "_SDD", &input,
+	status = acpi_evaluate_object(ACPI_HANDLE(&dev->tdev), "_SDD", &input,
 				      NULL);
 	swap_buf_le16(dev->id, ATA_ID_WORDS);
 
