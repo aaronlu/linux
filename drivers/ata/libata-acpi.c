@@ -39,17 +39,17 @@ static void ata_acpi_clear_gtf(struct ata_device *dev)
 }
 
 /**
- * ata_dev_acpi_handle - provide the acpi_handle for an ata_device
- * @dev: the acpi_handle returned will correspond to this device
+ * ata_dev_acpi_device - provide the acpi_device for an ata_device
+ * @dev: the acpi_device returned will correspond to this device
  *
- * Returns the acpi_handle for the ACPI namespace object corresponding to
+ * Returns the acpi_device for the ACPI namespace object corresponding to
  * the ata_device passed into the function, or NULL if no such object exists
  * or ACPI is disabled for this device due to consecutive errors.
  */
-acpi_handle ata_dev_acpi_handle(struct ata_device *dev)
+struct acpi_device *ata_dev_acpi_device(struct ata_device *dev)
 {
 	return dev->flags & ATA_DFLAG_ACPI_DISABLED ?
-			NULL : ACPI_HANDLE(&dev->tdev);
+			NULL : ACPI_COMPANION(&dev->tdev);
 }
 
 /* @ap and @dev are the same as ata_acpi_handle_hotplug() */
@@ -833,7 +833,7 @@ void ata_acpi_on_resume(struct ata_port *ap)
 		 * schedule _GTF.
 		 */
 		ata_for_each_dev(dev, &ap->link, ENABLED) {
-			if (ata_dev_acpi_handle(dev)) {
+			if (ata_dev_acpi_device(dev)) {
 				ata_acpi_clear_gtf(dev);
 				if (ata_dev_get_GTF(dev, NULL) >= 0)
 					dev->flags |= ATA_DFLAG_ACPI_PENDING;
@@ -845,7 +845,7 @@ void ata_acpi_on_resume(struct ata_port *ap)
 		 * without _STM.  Clear cache and schedule _GTF.
 		 */
 		ata_for_each_dev(dev, &ap->link, ENABLED) {
-			if (ata_dev_acpi_handle(dev)) {
+			if (ata_dev_acpi_device(dev)) {
 				ata_acpi_clear_gtf(dev);
 				dev->flags |= ATA_DFLAG_ACPI_PENDING;
 			}
@@ -880,8 +880,8 @@ static void sata_acpi_set_state(struct ata_port *ap, pm_message_t state)
 
 	ata_for_each_link(link, ap, HOST_FIRST) {
 		struct ata_device *dev = &link->device[0];
-		acpi_handle handle = ata_dev_acpi_handle(dev);
-		if (!handle)
+		struct acpi_device *adev = ata_dev_acpi_device(dev);
+		if (!adev)
 			continue;
 
 		if (resume) {
@@ -895,7 +895,7 @@ static void sata_acpi_set_state(struct ata_port *ap, pm_message_t state)
 				zpodd_enable_run_wake(dev);
 		}
 
-		acpi_bus_set_power(handle, acpi_state);
+		acpi_device_set_power(adev, acpi_state);
 	}
 }
 
@@ -903,28 +903,28 @@ static void sata_acpi_set_state(struct ata_port *ap, pm_message_t state)
 static void pata_acpi_set_state(struct ata_port *ap, pm_message_t state)
 {
 	struct ata_device *dev;
-	acpi_handle port_handle;
+	struct acpi_device *port_adev;
 
-	port_handle = ACPI_HANDLE(&ap->tdev);
-	if (!port_handle)
+	port_adev = ACPI_COMPANION(&ap->tdev);
+	if (!port_adev)
 		return;
 
 	/* channel first and then drives for power on and vica versa
 	   for power off */
 	if (state.event & PM_EVENT_RESUME)
-		acpi_bus_set_power(port_handle, ACPI_STATE_D0);
+		acpi_device_set_power(port_adev, ACPI_STATE_D0);
 
 	ata_for_each_dev(dev, &ap->link, ENABLED) {
-		acpi_handle dev_handle = ata_dev_acpi_handle(dev);
-		if (!dev_handle)
+		struct acpi_device *adev = ata_dev_acpi_device(dev);
+		if (!adev)
 			continue;
 
-		acpi_bus_set_power(dev_handle, state.event & PM_EVENT_RESUME ?
-					ACPI_STATE_D0 : ACPI_STATE_D3_COLD);
+		acpi_device_set_power(adev, state.event & PM_EVENT_RESUME ?
+				      ACPI_STATE_D0 : ACPI_STATE_D3_COLD);
 	}
 
 	if (!(state.event & PM_EVENT_RESUME))
-		acpi_bus_set_power(port_handle, ACPI_STATE_D3_COLD);
+		acpi_device_set_power(port_adev, ACPI_STATE_D3_COLD);
 }
 
 /**
@@ -965,7 +965,7 @@ int ata_acpi_on_devcfg(struct ata_device *dev)
 	int nr_executed = 0;
 	int rc;
 
-	if (!ata_dev_acpi_handle(dev))
+	if (!ata_dev_acpi_device(dev))
 		return 0;
 
 	/* do we need to do _GTF? */
