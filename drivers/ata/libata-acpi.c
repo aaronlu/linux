@@ -872,28 +872,28 @@ out:
 static void sata_acpi_set_state(struct ata_port *ap, pm_message_t state)
 {
 	bool runtime = PMSG_IS_AUTO(state);
-	struct ata_device *dev;
-	acpi_handle handle;
+	bool resume = state.event & PM_EVENT_RESUME;
+	struct ata_link *link;
 	int acpi_state;
 
-	ata_for_each_dev(dev, &ap->link, ENABLED) {
-		handle = ata_dev_acpi_handle(dev);
+	ata_for_each_link(link, ap, HOST_FIRST) {
+		struct ata_device *dev = &link->device[0];
+		acpi_handle handle = ata_dev_acpi_handle(dev);
 		if (!handle)
 			continue;
 
-		if (!(state.event & PM_EVENT_RESUME)) {
+		if (resume) {
+			acpi_state = ACPI_STATE_D0;
+			if (runtime && zpodd_dev_enabled(dev))
+				zpodd_disable_run_wake(dev);
+		} else {
 			acpi_state = ata_acpi_choose_suspend_state(dev, runtime);
-			if (acpi_state == ACPI_STATE_D0)
-				continue;
 			if (runtime && zpodd_dev_enabled(dev) &&
 			    acpi_state == ACPI_STATE_D3_COLD)
 				zpodd_enable_run_wake(dev);
-			acpi_bus_set_power(handle, acpi_state);
-		} else {
-			if (runtime && zpodd_dev_enabled(dev))
-				zpodd_disable_run_wake(dev);
-			acpi_bus_set_power(handle, ACPI_STATE_D0);
 		}
+
+		acpi_bus_set_power(handle, acpi_state);
 	}
 }
 
