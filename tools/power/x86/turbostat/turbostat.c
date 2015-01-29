@@ -38,6 +38,7 @@
 #include <ctype.h>
 #include <sched.h>
 #include <cpuid.h>
+#include <errno.h>
 
 char *proc_stat = "/proc/stat";
 unsigned int interval_sec = 5;	/* set with -i interval_sec */
@@ -80,7 +81,7 @@ unsigned int do_ptm;
 unsigned int tcc_activation_temp;
 unsigned int tcc_activation_temp_override;
 double rapl_power_units, rapl_energy_units, rapl_time_units;
-double rapl_joule_counter_range;
+int counter_sample_time;
 
 #define RAPL_PKG		(1 << 0)
 					/* 0x610 MSR_PKG_POWER_LIMIT */
@@ -152,12 +153,18 @@ struct pkg_data {
 	unsigned long long pc9;
 	unsigned long long pc10;
 	unsigned int package_id;
-	unsigned int energy_pkg;	/* MSR_PKG_ENERGY_STATUS */
-	unsigned int energy_dram;	/* MSR_DRAM_ENERGY_STATUS */
-	unsigned int energy_cores;	/* MSR_PP0_ENERGY_STATUS */
-	unsigned int energy_gfx;	/* MSR_PP1_ENERGY_STATUS */
-	unsigned int rapl_pkg_perf_status;	/* MSR_PKG_PERF_STATUS */
-	unsigned int rapl_dram_perf_status;	/* MSR_DRAM_PERF_STATUS */
+	unsigned long long energy_pkg;	/* MSR_PKG_ENERGY_STATUS */
+	int energy_pkg_last;
+	unsigned long long energy_dram;	/* MSR_DRAM_ENERGY_STATUS */
+	int energy_dram_last;
+	unsigned long long energy_cores;/* MSR_PP0_ENERGY_STATUS */
+	int energy_cores_last;
+	unsigned long long energy_gfx;	/* MSR_PP1_ENERGY_STATUS */
+	int energy_gfx_last;
+	unsigned long long rapl_pkg_perf_status;	/* MSR_PKG_PERF_STATUS */
+	int rapl_pkg_perf_status_last;
+	unsigned long long rapl_dram_perf_status;	/* MSR_DRAM_PERF_STATUS */
+	int rapl_dram_perf_status_last;
 	unsigned int pkg_temp_c;
 
 } *package_even, *package_odd;
@@ -397,14 +404,14 @@ int dump_counters(struct thread_data *t, struct core_data *c,
 		outp += sprintf(outp, "pc8: %016llX\n", p->pc8);
 		outp += sprintf(outp, "pc9: %016llX\n", p->pc9);
 		outp += sprintf(outp, "pc10: %016llX\n", p->pc10);
-		outp += sprintf(outp, "Joules PKG: %0X\n", p->energy_pkg);
-		outp += sprintf(outp, "Joules COR: %0X\n", p->energy_cores);
-		outp += sprintf(outp, "Joules GFX: %0X\n", p->energy_gfx);
-		outp += sprintf(outp, "Joules RAM: %0X\n", p->energy_dram);
+		outp += sprintf(outp, "Joules PKG: %0X\n", p->energy_pkg_last);
+		outp += sprintf(outp, "Joules COR: %0X\n", p->energy_cores_last);
+		outp += sprintf(outp, "Joules GFX: %0X\n", p->energy_gfx_last);
+		outp += sprintf(outp, "Joules RAM: %0X\n", p->energy_dram_last);
 		outp += sprintf(outp, "Throttle PKG: %0X\n",
-			p->rapl_pkg_perf_status);
+			p->rapl_pkg_perf_status_last);
 		outp += sprintf(outp, "Throttle RAM: %0X\n",
-			p->rapl_dram_perf_status);
+			p->rapl_dram_perf_status_last);
 		outp += sprintf(outp, "PTM: %dC\n", p->pkg_temp_c);
 	}
 
@@ -539,18 +546,12 @@ int format_counters(struct thread_data *t, struct core_data *c,
 		outp += sprintf(outp, "%8.2f", 100.0 * p->pc10/t->tsc);
 	}
 
-	/*
- 	 * If measurement interval exceeds minimum RAPL Joule Counter range,
- 	 * indicate that results are suspect by printing "**" in fraction place.
- 	 */
-	if (interval_float < rapl_joule_counter_range)
-		fmt8 = "%8.2f";
-	else
-		fmt8 = " %6.0f**";
-
+	fmt8 = "%8.2f";
 	if (do_rapl && !rapl_joules) {
-		if (do_rapl & RAPL_PKG)
+		if (do_rapl & RAPL_PKG) {
+			fprintf(stderr, "energy_pkg=0x%llx, units=0x%f, interval=%f\n", p->energy_pkg, rapl_energy_units, interval_float);
 			outp += sprintf(outp, fmt8, p->energy_pkg * rapl_energy_units / interval_float);
+		}
 		if (do_rapl & RAPL_CORES)
 			outp += sprintf(outp, fmt8, p->energy_cores * rapl_energy_units / interval_float);
 		if (do_rapl & RAPL_GFX)
@@ -617,13 +618,6 @@ void format_all_counters(struct thread_data *t, struct core_data *c, struct pkg_
 	for_all_cpus(format_counters, t, c, p);
 }
 
-#define DELTA_WRAP32(new, old)			\
-	if (new > old) {			\
-		old = new - old;		\
-	} else {				\
-		old = 0x100000000 + new - old;	\
-	}
-
 void
 delta_package(struct pkg_data *new, struct pkg_data *old)
 {
@@ -636,12 +630,10 @@ delta_package(struct pkg_data *new, struct pkg_data *old)
 	old->pc10 = new->pc10 - old->pc10;
 	old->pkg_temp_c = new->pkg_temp_c;
 
-	DELTA_WRAP32(new->energy_pkg, old->energy_pkg);
-	DELTA_WRAP32(new->energy_cores, old->energy_cores);
-	DELTA_WRAP32(new->energy_gfx, old->energy_gfx);
-	DELTA_WRAP32(new->energy_dram, old->energy_dram);
-	DELTA_WRAP32(new->rapl_pkg_perf_status, old->rapl_pkg_perf_status);
-	DELTA_WRAP32(new->rapl_dram_perf_status, old->rapl_dram_perf_status);
+	/*
+	 * rapl related counters are already stored in old(EVEN)'s
+	 * corresponding fields by rapl_sample_counters.
+	 */
 }
 
 void
@@ -872,6 +864,10 @@ static unsigned long long rdtsc(void)
 	return low | ((unsigned long long)high) << 32;
 }
 
+static int is_odd_package(struct pkg_data *p)
+{
+	return (p - p->package_id) == package_odd;
+}
 
 /*
  * get_counters(...)
@@ -882,6 +878,7 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 {
 	int cpu = t->cpu_id;
 	unsigned long long msr;
+	struct timeval tv;
 
 	if (cpu_migrate(cpu)) {
 		fprintf(stderr, "Could not migrate to CPU %d\n", cpu);
@@ -976,44 +973,125 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		if (get_msr(cpu, MSR_PKG_C10_RESIDENCY, &p->pc10))
 			return -13;
 	}
-	if (do_rapl & RAPL_PKG) {
-		if (get_msr(cpu, MSR_PKG_ENERGY_STATUS, &msr))
-			return -13;
-		p->energy_pkg = msr & 0xFFFFFFFF;
-	}
-	if (do_rapl & RAPL_CORES) {
-		if (get_msr(cpu, MSR_PP0_ENERGY_STATUS, &msr))
-			return -14;
-		p->energy_cores = msr & 0xFFFFFFFF;
-	}
-	if (do_rapl & RAPL_DRAM) {
-		if (get_msr(cpu, MSR_DRAM_ENERGY_STATUS, &msr))
-			return -15;
-		p->energy_dram = msr & 0xFFFFFFFF;
-	}
-	if (do_rapl & RAPL_GFX) {
-		if (get_msr(cpu, MSR_PP1_ENERGY_STATUS, &msr))
-			return -16;
-		p->energy_gfx = msr & 0xFFFFFFFF;
-	}
-	if (do_rapl & RAPL_PKG_PERF_STATUS) {
-		if (get_msr(cpu, MSR_PKG_PERF_STATUS, &msr))
-			return -16;
-		p->rapl_pkg_perf_status = msr & 0xFFFFFFFF;
-	}
-	if (do_rapl & RAPL_DRAM_PERF_STATUS) {
-		if (get_msr(cpu, MSR_DRAM_PERF_STATUS, &msr))
-			return -16;
-		p->rapl_dram_perf_status = msr & 0xFFFFFFFF;
-	}
 	if (do_ptm) {
 		if (get_msr(cpu, MSR_IA32_PACKAGE_THERM_STATUS, &msr))
 			return -17;
 		p->pkg_temp_c = tcc_activation_temp - ((msr >> 16) & 0x7F);
 	}
+
+	if (is_odd_package(p))
+		return 0;
+
+
+	/* Clear rapl related counters and record the initial value */
+	if (do_rapl & RAPL_PKG) {
+		gettimeofday(&tv, NULL);
+		if (get_msr(cpu, MSR_PKG_ENERGY_STATUS, &msr))
+			return -13;
+		p->energy_pkg_last = msr & 0xFFFFFFFF;
+		p->energy_pkg = 0;
+		fprintf(stderr, "[%ld.%ld] cpu%d, energy_pkg_last=0x%08x\n", tv.tv_sec, tv.tv_usec, cpu, p->energy_pkg_last);
+	}
+	if (do_rapl & RAPL_CORES) {
+		if (get_msr(cpu, MSR_PP0_ENERGY_STATUS, &msr))
+			return -14;
+		p->energy_cores_last = msr & 0xFFFFFFFF;
+		p->energy_cores = 0;
+	}
+	if (do_rapl & RAPL_DRAM) {
+		if (get_msr(cpu, MSR_DRAM_ENERGY_STATUS, &msr))
+			return -15;
+		p->energy_dram_last = msr & 0xFFFFFFFF;
+		p->energy_dram = 0;
+	}
+	if (do_rapl & RAPL_GFX) {
+		if (get_msr(cpu, MSR_PP1_ENERGY_STATUS, &msr))
+			return -16;
+		p->energy_gfx_last = msr & 0xFFFFFFFF;
+		p->energy_gfx = 0;
+	}
+	if (do_rapl & RAPL_PKG_PERF_STATUS) {
+		if (get_msr(cpu, MSR_PKG_PERF_STATUS, &msr))
+			return -16;
+		p->rapl_pkg_perf_status_last = msr & 0xFFFFFFFF;
+		p->rapl_pkg_perf_status = 0;
+	}
+	if (do_rapl & RAPL_DRAM_PERF_STATUS) {
+		if (get_msr(cpu, MSR_DRAM_PERF_STATUS, &msr))
+			return -16;
+		p->rapl_dram_perf_status_last = msr & 0xFFFFFFFF;
+		p->rapl_dram_perf_status = 0;
+	}
+
 	return 0;
 }
 
+int rapl_sample_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
+{
+	unsigned int pkg, cores, dram, gfx, rapl_pkg, rapl_dram;
+	unsigned long long msr;
+	int cpu = t->cpu_id;
+	struct timeval tv;
+
+	/* collect package counters only for 1st core in package */
+	if (!(t->flags & CPU_IS_FIRST_CORE_IN_PACKAGE))
+		return 0;
+
+	if (cpu_migrate(cpu)) {
+		fprintf(stderr, "Could not migrate to CPU %d\n", cpu);
+		return -1;
+	}
+
+	if (do_rapl & RAPL_PKG) {
+		gettimeofday(&tv, NULL);
+
+		if (get_msr(cpu, MSR_PKG_ENERGY_STATUS, &msr))
+			return -2;
+		pkg = msr & 0xFFFFFFFF;
+		fprintf(stderr, "[%ld.%ld] cpu%d, pkg_last=0x%08x, pkg=0x%08x, delta=0x%08x",
+				tv.tv_sec, tv.tv_usec, cpu, p->energy_pkg_last, pkg, pkg - p->energy_pkg_last);
+		p->energy_pkg += pkg - p->energy_pkg_last;
+		p->energy_pkg_last = pkg;
+		fprintf(stderr, ", energy_pkg=0x%llx\n", p->energy_pkg);
+	}
+	if (do_rapl & RAPL_CORES) {
+		if (get_msr(cpu, MSR_PP0_ENERGY_STATUS, &msr))
+			return -3;
+		cores = msr & 0xFFFFFFFF;
+		p->energy_cores += cores - p->energy_cores_last;
+		p->energy_cores_last = cores;
+	}
+	if (do_rapl & RAPL_DRAM) {
+		if (get_msr(cpu, MSR_DRAM_ENERGY_STATUS, &msr))
+			return -4;
+		dram = msr & 0xFFFFFFFF;
+		p->energy_dram += dram - p->energy_dram_last;
+		p->energy_dram_last = dram;
+	}
+	if (do_rapl & RAPL_GFX) {
+		if (get_msr(cpu, MSR_PP1_ENERGY_STATUS, &msr))
+			return -5;
+		gfx = msr & 0xFFFFFFFF;
+		p->energy_gfx += gfx - p->energy_gfx_last;
+		p->energy_gfx_last = gfx;
+	}
+	if (do_rapl & RAPL_PKG_PERF_STATUS) {
+		if (get_msr(cpu, MSR_PKG_PERF_STATUS, &msr))
+			return -6;
+		rapl_pkg = msr & 0xFFFFFFFF;
+		p->rapl_pkg_perf_status += rapl_pkg - p->rapl_pkg_perf_status_last;
+		p->rapl_pkg_perf_status_last = rapl_pkg;
+	}
+	if (do_rapl & RAPL_DRAM_PERF_STATUS) {
+		if (get_msr(cpu, MSR_DRAM_PERF_STATUS, &msr))
+			return -7;
+		rapl_dram = msr & 0xFFFFFFFF;
+		p->rapl_dram_perf_status += rapl_dram - p->rapl_dram_perf_status_last;
+		p->rapl_dram_perf_status_last = rapl_dram;
+	}
+
+	return 0;
+}
 void print_verbose_header(void)
 {
 	unsigned long long msr;
@@ -1398,57 +1476,60 @@ int mark_cpu_present(int cpu)
 
 void turbostat_loop()
 {
-	int retval;
+	int retval, n, remain, i;
 	int restarted = 0;
 
-restart:
-	restarted++;
-
-	retval = for_all_cpus(get_counters, EVEN_COUNTERS);
-	if (retval < -1) {
-		exit(retval);
-	} else if (retval == -1) {
-		if (restarted > 1) {
-			exit(retval);
-		}
-		re_initialize();
-		goto restart;
-	}
-	restarted = 0;
-	gettimeofday(&tv_even, (struct timezone *)NULL);
-
 	while (1) {
+		restarted++;
+
+		retval = for_all_cpus(get_counters, EVEN_COUNTERS);
+		if (retval < -1) {
+			exit(retval);
+		} else if (retval == -1) {
+			if (restarted > 1) {
+				exit(retval);
+			}
+			re_initialize();
+			continue;
+		}
+		restarted = 0;
+		gettimeofday(&tv_even, (struct timezone *)NULL);
+
 		if (for_all_proc_cpus(cpu_is_not_present)) {
 			re_initialize();
-			goto restart;
+			continue;
 		}
-		sleep(interval_sec);
+
+		if (interval_sec > counter_sample_time) {
+			n = interval_sec / counter_sample_time;
+			remain = interval_sec - n * counter_sample_time;
+		} else {
+			n = 0;
+			remain = interval_sec;
+		}
+		for (i = 0; i <= n; i++) {
+			sleep(i < n ? counter_sample_time : remain);
+			retval = for_all_cpus(rapl_sample_counters, EVEN_COUNTERS);
+			if (retval < -1) {
+				exit(retval);
+			} else if (retval == -1) {
+				re_initialize();
+				continue;
+			}
+		}
+
 		retval = for_all_cpus(get_counters, ODD_COUNTERS);
 		if (retval < -1) {
 			exit(retval);
 		} else if (retval == -1) {
 			re_initialize();
-			goto restart;
+			continue;
 		}
 		gettimeofday(&tv_odd, (struct timezone *)NULL);
 		timersub(&tv_odd, &tv_even, &tv_delta);
 		for_all_cpus_2(delta_cpu, ODD_COUNTERS, EVEN_COUNTERS);
 		compute_average(EVEN_COUNTERS);
 		format_all_counters(EVEN_COUNTERS);
-		flush_stdout();
-		sleep(interval_sec);
-		retval = for_all_cpus(get_counters, EVEN_COUNTERS);
-		if (retval < -1) {
-			exit(retval);
-		} else if (retval == -1) {
-			re_initialize();
-			goto restart;
-		}
-		gettimeofday(&tv_even, (struct timezone *)NULL);
-		timersub(&tv_even, &tv_odd, &tv_delta);
-		for_all_cpus_2(delta_cpu, EVEN_COUNTERS, ODD_COUNTERS);
-		compute_average(ODD_COUNTERS);
-		format_all_counters(ODD_COUNTERS);
 		flush_stdout();
 	}
 }
@@ -1567,20 +1648,21 @@ int print_epb(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 #define	RAPL_POWER_GRANULARITY	0x7FFF	/* 15 bit power granularity */
 #define	RAPL_TIME_GRANULARITY	0x3F /* 6 bit time granularity */
 
-double get_tdp(model)
+double get_max_power(model)
 {
 	unsigned long long msr;
 
 	if (do_rapl & RAPL_PKG_POWER_INFO)
 		if (!get_msr(0, MSR_PKG_POWER_INFO, &msr))
-			return ((msr >> 0) & RAPL_POWER_GRANULARITY) * rapl_power_units;
+			return ((msr >> 32) & RAPL_POWER_GRANULARITY) * rapl_power_units;
 
+	/* max power is roughly 2 times of the tdp */
 	switch (model) {
 	case 0x37:
 	case 0x4D:
-		return 30.0;
+		return 30.0 * 2;
 	default:
-		return 135.0;
+		return 135.0 * 2;
 	}
 }
 
@@ -1594,7 +1676,7 @@ void rapl_probe(unsigned int family, unsigned int model)
 {
 	unsigned long long msr;
 	unsigned int time_unit;
-	double tdp;
+	double rapl_joule_counter_range, max;
 
 	if (!genuine_intel)
 		return;
@@ -1644,11 +1726,13 @@ void rapl_probe(unsigned int family, unsigned int model)
 
 	rapl_time_units = 1.0 / (1 << (time_unit));
 
-	tdp = get_tdp(model);
+	max = get_max_power(model);
 
-	rapl_joule_counter_range = 0xFFFFFFFF * rapl_energy_units / tdp;
+	rapl_joule_counter_range = 0xFFFFFFFF * rapl_energy_units / max;
+	/* Adds some flexibity to the sample time since our timer will not arrive that precisely */
+	counter_sample_time = rapl_joule_counter_range - 5;
 	if (verbose)
-		fprintf(stderr, "RAPL: %.0f sec. Joule Counter Range, at %.0f Watts\n", rapl_joule_counter_range, tdp);
+		fprintf(stderr, "RAPL: %.0f sec. Joule Counter Range, at %.0f Watts, sample %d sec.\n", rapl_joule_counter_range, max, counter_sample_time);
 
 	return;
 }
@@ -2321,10 +2405,18 @@ void turbostat_init()
 		for_all_cpus(print_thermal, ODD_COUNTERS);
 }
 
+void sig_handle_alarm(int signum)
+{
+	int retval = for_all_cpus(rapl_sample_counters, EVEN_COUNTERS);
+	if (retval)
+		exit(retval);
+}
+
 int fork_it(char **argv)
 {
 	pid_t child_pid;
-	int status;
+	int status, ret;
+	struct sigaction sa;
 
 	status = for_all_cpus(get_counters, EVEN_COUNTERS);
 	if (status)
@@ -2345,8 +2437,24 @@ int fork_it(char **argv)
 
 		signal(SIGINT, SIG_IGN);
 		signal(SIGQUIT, SIG_IGN);
-		if (waitpid(child_pid, &status, 0) == -1)
-			err(status, "waitpid");
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_handler = sig_handle_alarm;
+		if (sigaction(SIGALRM, &sa, NULL) == -1)
+			err(-1, "sigaction");
+
+		while (1) {
+			alarm(counter_sample_time);
+			ret = waitpid(child_pid, &status, 0);
+			if (ret == -1) {
+				if (errno == EINTR)
+					continue;
+				else
+					err(status, "waitpid");
+			} else {
+				break;
+			}
+		}
+		for_all_cpus(rapl_sample_counters, EVEN_COUNTERS);
 	}
 	/*
 	 * n.b. fork_it() does not check for errors from for_all_cpus()
@@ -2361,7 +2469,6 @@ int fork_it(char **argv)
 	flush_stderr();
 
 	fprintf(stderr, "%.6f sec\n", tv_delta.tv_sec + tv_delta.tv_usec/1000000.0);
-
 	return status;
 }
 
@@ -2369,11 +2476,11 @@ int get_and_dump_counters(void)
 {
 	int status;
 
-	status = for_all_cpus(get_counters, ODD_COUNTERS);
+	status = for_all_cpus(get_counters, EVEN_COUNTERS);
 	if (status)
 		return status;
 
-	status = for_all_cpus(dump_counters, ODD_COUNTERS);
+	status = for_all_cpus(dump_counters, EVEN_COUNTERS);
 	if (status)
 		return status;
 
@@ -2441,7 +2548,7 @@ int main(int argc, char **argv)
 	cmdline(argc, argv);
 
 	if (verbose)
-		fprintf(stderr, "turbostat v3.7 Feb 6, 2014"
+		fprintf(stderr, "turbostat v3.8 Jan 29, 2015"
 			" - Len Brown <lenb@kernel.org>\n");
 
 	turbostat_init();
