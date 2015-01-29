@@ -42,6 +42,11 @@ The \fB-M MSR#\fP option includes the the specified 64-bit MSR value.
 The \fB-i interval_sec\fP option prints statistics every \fiinterval_sec\fP seconds.
 The default is 5 seconds.
 .PP
+The \fB-x GROUP\fP option enables PCU event group monitoring. Valid groups are
+2 for thermal frequency limits, 3 and 4 for other frequency limits,
+5 for frequency transitions statistics. Requires the kernel
+to support the perf uncore driver for this platform.
+.PP
 The \fBcommand\fP parameter forks \fBcommand\fP and upon its exit,
 displays the statistics gathered since it was forked.
 .PP

@@ -3,17 +3,20 @@ BUILD_OUTPUT	:= $(PWD)
 PREFIX		:= /usr
 DESTDIR		:=
 
-turbostat : turbostat.c
+turbostat : turbostat.o resolve.o
+	@mkdir -p $(BUILD_OUTPUT)
+	$(CC) $(LDFLAGS) $^ -o $(BUILD_OUTPUT)/$@
+
 CFLAGS +=	-Wall
 CFLAGS +=	-DMSRHEADER='"../../../../arch/x86/include/uapi/asm/msr-index.h"'
 
-%: %.c
+%.o: %.c
 	@mkdir -p $(BUILD_OUTPUT)
-	$(CC) $(CFLAGS) $< -o $(BUILD_OUTPUT)/$@
+	$(CC) $(CFLAGS) $< -c -o $(BUILD_OUTPUT)/$@
 
 .PHONY : clean
 clean :
-	@rm -f $(BUILD_OUTPUT)/turbostat
+	@rm -f $(BUILD_OUTPUT)/turbostat turbostat.o resolve.o
 
 install : turbostat
 	install -d  $(DESTDIR)$(PREFIX)/bin

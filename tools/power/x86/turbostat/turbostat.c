@@ -39,6 +39,9 @@
 #include <sched.h>
 #include <cpuid.h>
 #include <errno.h>
+#include <sys/syscall.h>
+#include <linux/perf_event.h>
+#include "resolve.h"
 
 char *proc_stat = "/proc/stat";
 unsigned int interval_sec = 5;	/* set with -i interval_sec */
@@ -82,6 +85,11 @@ unsigned int tcc_activation_temp;
 unsigned int tcc_activation_temp_override;
 double rapl_power_units, rapl_energy_units, rapl_time_units;
 int counter_sample_time;
+int do_pcu_group = -1;
+int is_jkt;
+int is_ivt;
+int is_hsx;
+int max_package_id;
 
 #define RAPL_PKG		(1 << 0)
 					/* 0x610 MSR_PKG_POWER_LIMIT */
@@ -166,7 +174,7 @@ struct pkg_data {
 	unsigned long long rapl_dram_perf_status;	/* MSR_DRAM_PERF_STATUS */
 	int rapl_dram_perf_status_last;
 	unsigned int pkg_temp_c;
-
+	unsigned long long pcu0, pcu1, pcu2, pcu3;
 } *package_even, *package_odd;
 
 #define ODD_COUNTERS thread_odd, core_odd, package_odd
@@ -271,6 +279,8 @@ int get_msr(int cpu, off_t offset, unsigned long long *msr)
 	return 0;
 }
 
+static char *pcu_group_titles[][3];
+
 /*
  * Example Format w/ field column widths:
  *
@@ -360,6 +370,12 @@ void print_header(void)
 		outp += sprintf(outp, "   time");
 
 	}
+	if (do_pcu_group >= 0) {
+		outp += sprintf(outp, " %-12s", pcu_group_titles[do_pcu_group][0]);
+		outp += sprintf(outp, " %-12s", pcu_group_titles[do_pcu_group][1]);
+		if (pcu_group_titles[do_pcu_group][2][0])
+			outp += sprintf(outp, " %-8s", pcu_group_titles[do_pcu_group][2]);
+	}
 	outp += sprintf(outp, "\n");
 }
 
@@ -413,11 +429,23 @@ int dump_counters(struct thread_data *t, struct core_data *c,
 		outp += sprintf(outp, "Throttle RAM: %0X\n",
 			p->rapl_dram_perf_status_last);
 		outp += sprintf(outp, "PTM: %dC\n", p->pkg_temp_c);
+
+		outp += sprintf(outp, "PCU0: %0llX\n", p->pcu0);
+		outp += sprintf(outp, "PCU1: %0llX\n", p->pcu1);
+		outp += sprintf(outp, "PCU2: %0llX\n", p->pcu2);
+		outp += sprintf(outp, "PCU3: %0llX\n", p->pcu3);
 	}
 
 	outp += sprintf(outp, "\n");
 
 	return 0;
+}
+
+static int add_percent(char *outp, unsigned long long val, double cycles)
+{
+	if (val == 0)
+		return sprintf(outp, "%12s", "");
+	return sprintf(outp, " %12.2f", 100.0 * (val / cycles));
 }
 
 /*
@@ -582,6 +610,17 @@ int format_counters(struct thread_data *t, struct core_data *c,
 	outp += sprintf(outp, fmt8, interval_float);
 
 	}
+
+	if (do_pcu_group >= 0) {
+		double pcu_cycles = p->pcu0;
+
+		if (do_pcu_group == 5)
+			outp += sprintf(outp, " %12llu", p->pcu1);
+		else
+			outp += add_percent(outp, p->pcu2, pcu_cycles);
+		outp += add_percent(outp, p->pcu2, pcu_cycles);
+		outp += add_percent(outp, p->pcu3, pcu_cycles);
+	}
 done:
 	outp += sprintf(outp, "\n");
 
@@ -629,6 +668,10 @@ delta_package(struct pkg_data *new, struct pkg_data *old)
 	old->pc9 = new->pc9 - old->pc9;
 	old->pc10 = new->pc10 - old->pc10;
 	old->pkg_temp_c = new->pkg_temp_c;
+	old->pcu0 = new->pcu0;
+	old->pcu1 = new->pcu1;
+	old->pcu2 = new->pcu2;
+	old->pcu3 = new->pcu3;
 
 	/*
 	 * rapl related counters are already stored in old(EVEN)'s
@@ -775,6 +818,10 @@ void clear_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 	p->rapl_pkg_perf_status = 0;
 	p->rapl_dram_perf_status = 0;
 	p->pkg_temp_c = 0;
+	p->pcu0 = 0;
+	p->pcu1 = 0;
+	p->pcu2 = 0;
+	p->pcu3 = 0;
 }
 int sum_counters(struct thread_data *t, struct core_data *c,
 	struct pkg_data *p)
@@ -818,6 +865,11 @@ int sum_counters(struct thread_data *t, struct core_data *c,
 
 	average.packages.rapl_pkg_perf_status += p->rapl_pkg_perf_status;
 	average.packages.rapl_dram_perf_status += p->rapl_dram_perf_status;
+
+	average.packages.pcu0 += p->pcu0;
+	average.packages.pcu1 += p->pcu1;
+	average.packages.pcu2 += p->pcu2;
+	average.packages.pcu3 += p->pcu3;
 	return 0;
 }
 /*
@@ -862,6 +914,140 @@ static unsigned long long rdtsc(void)
 	asm volatile("rdtsc" : "=a" (low), "=d" (high));
 
 	return low | ((unsigned long long)high) << 32;
+}
+
+/* Get PCU statistics:
+
+   We can only measure three events at a time
+   (4 counters in the PCU, and one for the clock ticks event)
+
+   To generate new events use the ucevent tool in pmu-tools
+   FORCECPU=cpu ucevent.py --resolve EVENT-NAME */
+
+static char *pcu_groups[][5] = {
+	/* Runs into problems with the uncore driver with the filters for now. */
+	[0] = { NULL },
+	/* group 1 is covered already */
+	[1] = { NULL },
+	[2] = { "uncore_pcu/event=0x0/", /* PCU.CLOCKTICKS */
+		"uncore_pcu/event=0x9/", /* PCU.PROCHOT_EXTERNAL_CYCLES */
+		"uncore_pcu/event=0xa/", /* PCU.PROCHOT_INTERNAL_CYCLES */
+		"uncore_pcu/event=0x4/", /* PCU.FREQ_MAX_LIMIT_THERMAL_CYCLES */
+		NULL },
+	[3] = { "uncore_pcu/event=0x0/", /* PCU.CLOCKTICKS */
+		"uncore_pcu/event=0x4/", /* PCU.FREQ_MAX_LIMIT_THERMAL_CYCLES */
+		"uncore_pcu/event=0x5/", /* PCU.FREQ_MAX_POWER_CYCLES */
+		"uncore_pcu/event=0x7/", /* PCU.FREQ_MAX_CURRENT_CYCLES */
+		NULL },
+	[4] = { "uncore_pcu/event=0x0/", /* PCU.CLOCKTICKS */
+		"uncore_pcu/event=0x6/", /* PCU.FREQ_MAX_OS_CYCLES */
+		"uncore_pcu/event=0x5/", /* PCU.FREQ_MAX_POWER_CYCLES */
+		"uncore_pcu/event=0x7/", /* PCU.FREQ_MAX_CURRENT_CYCLES */
+		NULL },
+	[5] = { "uncore_pcu/event=0x0/", /* PCU.CLOCKTICKS */
+		"uncore_pcu/event=0x60,edge=1/", /* PCU.FREQ_TRANS_CYCLES,edge */
+		"uncore_pcu/event=0x60/", /* PCU.FREQ_TRANS_CYCLES */
+		NULL },
+};
+
+static char *pcu_group_titles[][3] = {
+	[0] = { "", "", "" },
+	[1] = { "", "", "" },
+	[2] = { "ProcHot-ext%", "ProcHot-int%", "Therm-Lim%" },
+	[3] = { "Therm-Lim%", "Power-Lim%", "Current-Lim%" },
+	[4] = { "OS-Limit%", "Power-Limit%", "Current-Lim%" },
+	[5] = { "Num-Freq-Trans", "Freq-Trans%", "" }
+};
+
+#define NUM_COUNTER 4
+
+static void pcu_fixup_tables(void)
+{
+	/* Table is for IVT. Fix up deltas to other CPUs */
+	if (is_hsx) {
+		pcu_groups[4][3] = NULL; /* No PCU.FREQ_MAX_CURRENT_CYCLES */
+		pcu_groups[3][3] = NULL;
+		pcu_group_titles[4][3] = NULL;
+		pcu_group_titles[3][3] = NULL;
+	} else if (is_jkt) {
+		pcu_groups[5][1] = "uncore_pcu/event=0x200000,edge=1/"; /* PCU.FREQ_TRANS_CYCLES */
+		pcu_groups[5][2] = "uncore_pcu/event=0x200000/";
+	}
+}
+
+static int pcu_perf_init(int group, int cpu, int *pcu_fd)
+{
+	int i;
+	char **evnames = pcu_groups[group];
+	pcu_fd[0] = -1;
+
+	for (i = 0; evnames[i]; i++) {
+		struct perf_event_attr attr;
+		char *ev = evnames[i];
+
+		if (tjevent_name_to_attr(ev, &attr) < 0) {
+			fprintf(stderr, "Cannot resolve %s\n", ev);
+			goto fallback;
+		}
+		attr.read_format = PERF_FORMAT_GROUP;
+		pcu_fd[i] = syscall(__NR_perf_event_open,
+				 &attr,
+				 -1,
+				 cpu,
+				 pcu_fd[0],
+				 i == 0 ? PERF_FLAG_FD_OUTPUT : 0);
+		if (pcu_fd[i] < 0) {
+			fprintf(stderr, "cannot open perf event %s\n", ev);
+			goto fallback;
+		}
+		if (ev != evnames[i])
+			free(ev);
+	}
+	return 0;
+fallback:
+	/* Don't error out */
+	do_pcu_group = -1;
+	while (--i >= 0) {
+		close(pcu_fd[i]);
+		pcu_fd[i] = -1;
+	}
+	return -1;
+}
+
+int get_pcu_data(struct pkg_data *p)
+{
+	static int **pcu_fds;
+	int *pcu_fd, i;
+	unsigned long long val[NUM_COUNTER + 3];
+
+	if (!pcu_fds)  {
+		pcu_fds = calloc(max_package_id + 1, sizeof(void *));
+		if (!pcu_fds)
+			err(1, "no memory");
+		for (i = 0; i < max_package_id + 1; i++) {
+			pcu_fds[i] = calloc(NUM_COUNTER, sizeof(void *));
+			if (!pcu_fds[i])
+				err(1, "no memory");
+		}
+	}
+	pcu_fd = pcu_fds[p->package_id];
+	if (!pcu_fd[0]) {
+		if (pcu_perf_init(do_pcu_group, p->package_id, pcu_fd) < 0)
+			return 0;
+		if (!pcu_fd[0])
+			return 0;
+	}
+
+	memset(val, 0, sizeof(val));
+	read(pcu_fd[0], val, sizeof(val));
+
+	/* XXX scale by run time for multiplexing */
+	p->pcu0 = val[1 + 0];
+	p->pcu1 = val[1 + 1];
+	p->pcu2 = val[1 + 2];
+	p->pcu3 = val[1 + 3];
+
+	return 0;
 }
 
 static int is_odd_package(struct pkg_data *p)
@@ -977,6 +1163,10 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		if (get_msr(cpu, MSR_IA32_PACKAGE_THERM_STATUS, &msr))
 			return -17;
 		p->pkg_temp_c = tcc_activation_temp - ((msr >> 16) & 0x7F);
+	}
+	if (do_pcu_group >= 0) {
+		if (get_pcu_data(p))
+			return -18;
 	}
 
 	if (is_odd_package(p))
@@ -2154,6 +2344,9 @@ void check_cpuid()
 	do_c8_c9_c10 = has_c8_c9_c10(family, model);
 	do_slm_cstates = is_slm(family, model);
 	bclk = discover_bclk(family, model);
+	is_jkt = genuine_intel && model == 45;
+	is_ivt = genuine_intel && model == 62;
+	is_hsx = genuine_intel && model == 63;
 
 	do_nehalem_turbo_ratio_limit = has_nehalem_turbo_ratio_limit(family, model);
 	do_ivt_turbo_ratio_limit = has_ivt_turbo_ratio_limit(family, model);
@@ -2165,7 +2358,7 @@ void check_cpuid()
 
 void usage()
 {
-	errx(1, "%s: [-v][-R][-T][-p|-P|-S][-c MSR#][-C MSR#][-m MSR#][-M MSR#][-i interval_sec | command ...]\n",
+	errx(1, "%s: [-v][-R][-T][-p|-P|-S][-c MSR#][-C MSR#][-m MSR#][-M MSR#] [-xPCUGROUP] [-i interval_sec | command ...]\n",
 	     progname);
 }
 
@@ -2191,7 +2384,6 @@ void topology_probe()
 {
 	int i;
 	int max_core_id = 0;
-	int max_package_id = 0;
 	int max_siblings = 0;
 	struct cpu_topology {
 		int core_id;
@@ -2403,6 +2595,10 @@ void turbostat_init()
 
 	if (verbose)
 		for_all_cpus(print_thermal, ODD_COUNTERS);
+
+	pcu_fixup_tables();
+	if (!is_ivt && !is_jkt && is_hsx)
+		do_pcu_group = -1;
 }
 
 void sig_handle_alarm(int signum)
@@ -2495,7 +2691,7 @@ void cmdline(int argc, char **argv)
 
 	progname = argv[0];
 
-	while ((opt = getopt(argc, argv, "+pPsSvi:c:C:m:M:RJT:")) != -1) {
+	while ((opt = getopt(argc, argv, "+pPsSvi:c:C:m:M:RJT:x:")) != -1) {
 		switch (opt) {
 		case 'p':
 			show_core_only++;
@@ -2535,6 +2731,11 @@ void cmdline(int argc, char **argv)
 			break;
 		case 'J':
 			rapl_joules++;
+			break;
+		case 'x':
+			sscanf(optarg, "%d", &do_pcu_group);
+			if (do_pcu_group < 0 || do_pcu_group > 5)
+				usage();
 			break;
 
 		default:
