@@ -1359,7 +1359,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 				struct zap_details *details)
 {
 	struct mm_struct *mm = tlb->mm;
-	int force_flush = 0;
+	int force_flush_tlb = 0, force_free_pages = 0;
 	int rss[NR_MM_COUNTERS];
 	spinlock_t *ptl;
 	pte_t *start_pte;
@@ -1400,7 +1400,7 @@ again:
 
 			if (!PageAnon(page)) {
 				if (pte_dirty(ptent)) {
-					force_flush = 1;
+					force_flush_tlb = 1;
 					set_page_dirty(page);
 				}
 				if (pte_young(ptent) &&
@@ -1412,7 +1412,7 @@ again:
 			if (unlikely(page_mapcount(page) < 0))
 				print_bad_pte(vma, addr, ptent, page);
 			if (unlikely(__tlb_remove_page(tlb, page))) {
-				force_flush = 1;
+				force_free_pages = 1;
 				addr += PAGE_SIZE;
 				break;
 			}
@@ -1463,18 +1463,14 @@ again:
 	arch_leave_lazy_mmu_mode();
 
 	/* Do the actual TLB flush before dropping ptl */
-	if (force_flush)
+	if (force_flush_tlb) {
+		force_flush_tlb = 0;
 		tlb_flush_mmu_tlbonly(tlb);
+	}
 	pte_unmap_unlock(start_pte, ptl);
 
-	/*
-	 * If we forced a TLB flush (either due to running out of
-	 * batch buffers or because we needed to flush dirty TLB
-	 * entries before releasing the ptl), free the batched
-	 * memory too. Restart if we didn't do everything.
-	 */
-	if (force_flush) {
-		force_flush = 0;
+	if (force_free_pages) {
+		force_free_pages = 0;
 		tlb_flush_mmu_free(tlb);
 		if (addr != end)
 			goto again;
