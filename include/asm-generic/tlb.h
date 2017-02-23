@@ -78,13 +78,10 @@ struct mmu_gather_batch {
 #define MAX_GATHER_BATCH	\
 	((PAGE_SIZE - sizeof(struct mmu_gather_batch)) / sizeof(void *))
 
-/*
- * Limit the maximum number of mmu_gather batches to reduce a risk of soft
- * lockups for non-preemptible kernels on huge machines when a lot of memory
- * is zapped during unmapping.
- * 10K pages freed at once should be safe even without a preemption point.
- */
-#define MAX_GATHER_BATCH_COUNT	(10000UL/MAX_GATHER_BATCH)
+#define ASYNC_FREE_THRESHOLD (256*1024UL)
+#define MAX_GATHER_BATCH_COUNT	\
+	DIV_ROUND_UP(ASYNC_FREE_THRESHOLD, MAX_GATHER_BATCH)
+#define PAGE_FREE_NR_TO_YIELD (10000UL)
 
 /* struct mmu_gather is an opaque type used by the mm code for passing around
  * any data needed by arch specific code for tlb_remove_page.
@@ -108,6 +105,10 @@ struct mmu_gather {
 	struct page		*__pages[MMU_GATHER_BUNDLE];
 	unsigned int		batch_count;
 	int page_size;
+	/* how many pages we have gathered to be freed */
+	unsigned int            page_nr;
+	/* list for spawned workers that do the free jobs */
+	struct list_head        worker_list;
 };
 
 #define HAVE_GENERIC_MMU_GATHER

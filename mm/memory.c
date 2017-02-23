@@ -229,6 +229,9 @@ void arch_tlb_gather_mmu(struct mmu_gather *tlb, struct mm_struct *mm,
 	tlb->local.max  = ARRAY_SIZE(tlb->__pages);
 	tlb->active     = &tlb->local;
 	tlb->batch_count = 0;
+	tlb->page_nr    = 0;
+
+	INIT_LIST_HEAD(&tlb->worker_list);
 
 #ifdef CONFIG_HAVE_RCU_TABLE_FREE
 	tlb->batch = NULL;
@@ -255,22 +258,65 @@ static void tlb_flush_mmu_free_batches(struct mmu_gather_batch *batch_start,
 				       bool free_batch_page)
 {
 	struct mmu_gather_batch *batch, *next;
+	int nr = 0;
 
 	for (batch = batch_start; batch; batch = next) {
 		next = batch->next;
 		if (batch->nr) {
 			free_pages_and_swap_cache(batch->pages, batch->nr);
+			nr += batch->nr;
 			batch->nr = 0;
 		}
-		if (free_batch_page)
+		if (free_batch_page) {
 			free_pages((unsigned long)batch, 0);
+			nr++;
+		}
+		if (nr >= PAGE_FREE_NR_TO_YIELD) {
+			cond_resched();
+			nr = 0;
+		}
 	}
+}
+
+struct batch_free_struct {
+	struct work_struct work;
+	struct mmu_gather_batch *batch_start;
+	struct list_head list;
+};
+
+static void batch_free_work(struct work_struct *work)
+{
+	struct batch_free_struct *batch_free = container_of(work,
+						struct batch_free_struct, work);
+	tlb_flush_mmu_free_batches(batch_free->batch_start, true);
 }
 
 static void tlb_flush_mmu_free(struct mmu_gather *tlb)
 {
+	struct batch_free_struct *batch_free = NULL;
+
+	if (tlb->page_nr >= ASYNC_FREE_THRESHOLD)
+		batch_free = kmalloc(sizeof(*batch_free),
+				     GFP_NOWAIT | __GFP_NOWARN);
+
+	if (batch_free) {
+		/*
+		 * Start a worker to free pages stored
+		 * in batches following tlb->local.
+		 */
+		batch_free->batch_start = tlb->local.next;
+		INIT_WORK(&batch_free->work, batch_free_work);
+		list_add_tail(&batch_free->list, &tlb->worker_list);
+		queue_work(system_unbound_wq, &batch_free->work);
+
+		tlb->batch_count = 0;
+		tlb->local.next = NULL;
+		/* fall through to free pages stored in tlb->local */
+	}
+
 	tlb_flush_mmu_free_batches(&tlb->local, false);
 	tlb->active = &tlb->local;
+	tlb->page_nr = 0;
 }
 
 void tlb_flush_mmu(struct mmu_gather *tlb)
@@ -286,6 +332,8 @@ void tlb_flush_mmu(struct mmu_gather *tlb)
 void arch_tlb_finish_mmu(struct mmu_gather *tlb,
 		unsigned long start, unsigned long end, bool force)
 {
+	struct batch_free_struct *batch, *next;
+
 	if (force)
 		__tlb_adjust_range(tlb, start, end - start);
 
@@ -293,6 +341,11 @@ void arch_tlb_finish_mmu(struct mmu_gather *tlb,
 
 	/* keep the page table cache within bounds */
 	check_pgt_cache();
+
+	list_for_each_entry_safe(batch, next, &tlb->worker_list, list) {
+		flush_work(&batch->work);
+		kfree(batch);
+	}
 
 	tlb_flush_mmu_free_batches(tlb->local.next, true);
 	tlb->local.next = NULL;
@@ -311,6 +364,8 @@ bool __tlb_remove_page_size(struct mmu_gather *tlb, struct page *page, int page_
 
 	VM_BUG_ON(!tlb->end);
 	VM_WARN_ON(tlb->page_size != page_size);
+
+	tlb->page_nr++;
 
 	batch = tlb->active;
 	/*
