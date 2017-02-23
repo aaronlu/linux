@@ -251,14 +251,25 @@ static void tlb_flush_mmu_tlbonly(struct mmu_gather *tlb)
 	__tlb_reset_range(tlb);
 }
 
+static void tlb_flush_mmu_free_batches(struct mmu_gather_batch *batch_start,
+				       bool free_batch_page)
+{
+	struct mmu_gather_batch *batch, *next;
+
+	for (batch = batch_start; batch; batch = next) {
+		next = batch->next;
+		if (batch->nr) {
+			free_pages_and_swap_cache(batch->pages, batch->nr);
+			batch->nr = 0;
+		}
+		if (free_batch_page)
+			free_pages((unsigned long)batch, 0);
+	}
+}
+
 static void tlb_flush_mmu_free(struct mmu_gather *tlb)
 {
-	struct mmu_gather_batch *batch;
-
-	for (batch = &tlb->local; batch && batch->nr; batch = batch->next) {
-		free_pages_and_swap_cache(batch->pages, batch->nr);
-		batch->nr = 0;
-	}
+	tlb_flush_mmu_free_batches(&tlb->local, false);
 	tlb->active = &tlb->local;
 }
 
@@ -275,8 +286,6 @@ void tlb_flush_mmu(struct mmu_gather *tlb)
 void arch_tlb_finish_mmu(struct mmu_gather *tlb,
 		unsigned long start, unsigned long end, bool force)
 {
-	struct mmu_gather_batch *batch, *next;
-
 	if (force)
 		__tlb_adjust_range(tlb, start, end - start);
 
@@ -285,10 +294,7 @@ void arch_tlb_finish_mmu(struct mmu_gather *tlb,
 	/* keep the page table cache within bounds */
 	check_pgt_cache();
 
-	for (batch = tlb->local.next; batch; batch = next) {
-		next = batch->next;
-		free_pages((unsigned long)batch, 0);
-	}
+	tlb_flush_mmu_free_batches(tlb->local.next, true);
 	tlb->local.next = NULL;
 }
 
