@@ -254,6 +254,19 @@ static void tlb_flush_mmu_tlbonly(struct mmu_gather *tlb)
 	__tlb_reset_range(tlb);
 }
 
+static struct workqueue_struct *batch_free_wq;
+static int __init batch_free_wq_init(void)
+{
+	batch_free_wq = alloc_workqueue("batch_free_wq",
+					WQ_UNBOUND | WQ_SYSFS, 0);
+	if (!batch_free_wq) {
+		pr_warn("failed to create workqueue batch_free_wq\n");
+		return -ENOMEM;
+	}
+	return 0;
+}
+subsys_initcall(batch_free_wq_init);
+
 static void tlb_flush_mmu_free_batches(struct mmu_gather_batch *batch_start,
 				       bool free_batch_page)
 {
@@ -307,7 +320,7 @@ static void tlb_flush_mmu_free(struct mmu_gather *tlb)
 		batch_free->batch_start = tlb->local.next;
 		INIT_WORK(&batch_free->work, batch_free_work);
 		list_add_tail(&batch_free->list, &tlb->worker_list);
-		queue_work(system_unbound_wq, &batch_free->work);
+		queue_work(batch_free_wq, &batch_free->work);
 
 		tlb->batch_count = 0;
 		tlb->local.next = NULL;
