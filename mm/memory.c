@@ -188,6 +188,35 @@ static void check_sync_rss_stat(struct task_struct *task)
 
 #ifdef HAVE_GENERIC_MMU_GATHER
 
+static unsigned long async_free_threshold = ASYNC_FREE_THRESHOLD;
+static unsigned long max_gather_batch_count = MAX_GATHER_BATCH_COUNT;
+
+#ifdef CONFIG_DEBUG_FS
+static int __init tlb_mmu_parallel_free_debugfs(void)
+{
+	umode_t mode = 0644;
+	struct dentry *dir;
+
+	dir = debugfs_create_dir("parallel_free", NULL);
+	if (!dir)
+		return -ENOMEM;
+
+	if (!debugfs_create_ulong("async_free_threshold", mode, dir,
+				&async_free_threshold))
+		goto fail;
+	if (!debugfs_create_ulong("max_gather_batch_count", mode, dir,
+				&max_gather_batch_count))
+		goto fail;
+
+	return 0;
+
+fail:
+	debugfs_remove_recursive(dir);
+	return -ENOMEM;
+}
+late_initcall(tlb_mmu_parallel_free_debugfs);
+#endif
+
 static bool tlb_next_batch(struct mmu_gather *tlb)
 {
 	struct mmu_gather_batch *batch;
@@ -198,7 +227,7 @@ static bool tlb_next_batch(struct mmu_gather *tlb)
 		return true;
 	}
 
-	if (tlb->batch_count == MAX_GATHER_BATCH_COUNT)
+	if (tlb->batch_count == max_gather_batch_count)
 		return false;
 
 	batch = (void *)__get_free_pages(GFP_NOWAIT | __GFP_NOWARN, 0);
@@ -308,7 +337,7 @@ static void tlb_flush_mmu_free(struct mmu_gather *tlb)
 {
 	struct batch_free_struct *batch_free = NULL;
 
-	if (tlb->page_nr >= ASYNC_FREE_THRESHOLD)
+	if (tlb->page_nr >= async_free_threshold)
 		batch_free = kmalloc(sizeof(*batch_free),
 				     GFP_NOWAIT | __GFP_NOWARN);
 
