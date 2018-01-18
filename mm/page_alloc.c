@@ -1099,6 +1099,31 @@ static bool bulkfree_pcp_prepare(struct page *page)
 }
 #endif /* CONFIG_DEBUG_VM */
 
+#ifdef CONFIG_X86_64
+static inline void prefetch_buddy(struct page *page)
+{
+	unsigned long pfn, buddy_pfn;
+	struct page *buddy;
+
+	/*
+	 * We are going to put the page back to the global
+	 * pool, prefetch its buddy to speed up later access
+	 * under zone->lock. It is believed the overhead of
+	 * calculating buddy_pfn here can be offset by reduced
+	 * memory latency later.
+	 */
+	pfn = page_to_pfn(page);
+	buddy_pfn = __find_buddy_pfn(pfn, 0);
+	buddy = page + (buddy_pfn - pfn);
+	asm (
+		"prefetcht0 %0\n\t"
+		:
+		: "m" (*(const char *)buddy));
+}
+#else
+static inline void prefetch_buddy(struct page *page) {}
+#endif
+
 /*
  * Frees a number of pages from the PCP lists
  * Assumes all pages on list are in same zone, and of same order.
@@ -1150,6 +1175,8 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 				continue;
 
 			list_add_tail(&page->lru, &head);
+
+			prefetch_buddy(page);
 		} while (--count && --batch_free && !list_empty(list));
 	}
 
