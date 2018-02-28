@@ -1601,6 +1601,8 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 
 	migrate_prep_local();
 
+	zone_wait_and_disable_cluster_alloc(zone);
+
 	while ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
 		int err;
 
@@ -1698,6 +1700,8 @@ out:
 		if (free_pfn > zone->compact_cached_free_pfn)
 			zone->compact_cached_free_pfn = free_pfn;
 	}
+
+	zone_enable_cluster_alloc(zone);
 
 	count_compact_events(COMPACTMIGRATE_SCANNED, cc->total_migrate_scanned);
 	count_compact_events(COMPACTFREE_SCANNED, cc->total_free_scanned);
