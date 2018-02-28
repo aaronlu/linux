@@ -355,6 +355,40 @@ enum zone_type {
 
 #ifndef __GENERATING_BOUNDS_H
 
+struct cluster {
+	struct page     *tail;  /* tail page of the cluster */
+	int             nr;     /* how many pages are in this cluster */
+};
+
+struct order0_cluster {
+	/* order 0 cluster array, dynamically allocated */
+	struct cluster *array;
+	/*
+	 * order 0 cluster array length, also used to indicate if cluster
+	 * allocation is enabled for this zone(cluster allocation is disabled
+	 * for small zones whose batch size is smaller than 1, like DMA zone)
+	 */
+	int             len;
+	/*
+	 * smallest position from where we search for an
+	 * empty cluster from the cluster array
+	 */
+	int		zero_bit;
+	/* bitmap used to quickly locate an empty cluster from cluster array */
+	unsigned long   *bitmap;
+
+	/* disable cluster allocation to avoid new pages becoming racy state. */
+	unsigned long	disable_depth;
+
+	/*
+	 * used to indicate if there are pages allocated in cluster mode
+	 * still in racy state. Caller with zone->lock held could use helper
+	 * function zone_wait_cluster_alloc() to wait all such pages to exit
+	 * the race window.
+	 */
+	atomic_t        in_progress;
+};
+
 struct zone {
 	/* Read-mostly fields */
 
@@ -459,6 +493,7 @@ struct zone {
 
 	/* free areas of different sizes */
 	struct free_area	free_area[MAX_ORDER];
+	struct order0_cluster	cluster;
 
 	/* zone flags, see below */
 	unsigned long		flags;

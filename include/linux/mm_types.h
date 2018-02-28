@@ -84,6 +84,8 @@ struct page {
 		void *s_mem;			/* slab first object */
 		atomic_t compound_mapcount;	/* first tail page */
 		/* page_deferred_list().next	 -- second tail page */
+
+		struct cluster *cluster;	/* order 0 cluster this page belongs to */
 	};
 
 	/* Second double word */

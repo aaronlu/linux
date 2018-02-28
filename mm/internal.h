@@ -557,12 +557,46 @@ static inline bool can_skip_merge(struct zone *zone, int order)
 	if (order)
 		return false;
 
+	/*
+	 * Clustered allocation is only disabled when high-order pages
+	 * are needed, e.g. in compaction and CMA alloc, so we should
+	 * also skip merging in that case.
+	 */
+	if (zone->cluster.disable_depth)
+		return false;
+
 	return true;
+}
+
+static inline void zone_wait_cluster_alloc(struct zone *zone)
+{
+	while (atomic_read(&zone->cluster.in_progress))
+		cpu_relax();
+}
+
+static inline void zone_wait_and_disable_cluster_alloc(struct zone *zone)
+{
+	unsigned long flags;
+	spin_lock_irqsave(&zone->lock, flags);
+	zone->cluster.disable_depth++;
+	zone_wait_cluster_alloc(zone);
+	spin_unlock_irqrestore(&zone->lock, flags);
+}
+
+static inline void zone_enable_cluster_alloc(struct zone *zone)
+{
+	unsigned long flags;
+	spin_lock_irqsave(&zone->lock, flags);
+	zone->cluster.disable_depth--;
+	spin_unlock_irqrestore(&zone->lock, flags);
 }
 #else /* CONFIG_COMPACTION */
 static inline bool can_skip_merge(struct zone *zone, int order)
 {
 	return false;
 }
+static inline void zone_wait_cluster_alloc(struct zone *zone) {}
+static inline void zone_wait_and_disable_cluster_alloc(struct zone *zone) {}
+static inline void zone_enable_cluster_alloc(struct zone *zone) {}
 #endif  /* CONFIG_COMPACTION */
 #endif	/* __MM_INTERNAL_H */

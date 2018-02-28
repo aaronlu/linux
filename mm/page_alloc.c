@@ -746,6 +746,82 @@ static inline void set_page_order(struct page *page, unsigned int order)
 	__SetPageBuddy(page);
 }
 
+static inline struct cluster *new_cluster(struct zone *zone, int nr,
+						struct page *tail)
+{
+	struct order0_cluster *cluster = &zone->cluster;
+	int n = find_next_zero_bit(cluster->bitmap, cluster->len, cluster->zero_bit);
+	if (n == cluster->len) {
+		printk_ratelimited("node%d zone %s cluster used up\n",
+				zone->zone_pgdat->node_id, zone->name);
+		return NULL;
+	}
+	cluster->zero_bit = n;
+	set_bit(n, cluster->bitmap);
+	cluster->array[n].nr = nr;
+	cluster->array[n].tail = tail;
+	return &cluster->array[n];
+}
+
+static inline struct cluster *add_to_cluster_common(struct page *page,
+			struct zone *zone, struct page *neighbor)
+{
+	struct cluster *c;
+
+	if (neighbor) {
+		int batch = this_cpu_ptr(zone->pageset)->pcp.batch;
+		c = neighbor->cluster;
+		if (c && c->nr < batch) {
+			page->cluster = c;
+			c->nr++;
+			return c;
+		}
+	}
+
+	c = new_cluster(zone, 1, page);
+	if (unlikely(!c))
+		return NULL;
+
+	page->cluster = c;
+	return c;
+}
+
+/*
+ * Add this page to the cluster where the previous head page belongs.
+ * Called after page is added to free_list(and becoming the new head).
+ */
+static inline void add_to_cluster_head(struct page *page, struct zone *zone,
+				       int order, int mt)
+{
+	struct page *neighbor;
+
+	if (order || !zone->cluster.len)
+		return;
+
+	neighbor = page->lru.next == &zone->free_area[0].free_list[mt] ?
+		   NULL : list_entry(page->lru.next, struct page, lru);
+	add_to_cluster_common(page, zone, neighbor);
+}
+
+/*
+ * Add this page to the cluster where the previous tail page belongs.
+ * Called after page is added to free_list(and becoming the new tail).
+ */
+static inline void add_to_cluster_tail(struct page *page, struct zone *zone,
+				       int order, int mt)
+{
+	struct page *neighbor;
+	struct cluster *c;
+
+	if (order || !zone->cluster.len)
+		return;
+
+	neighbor = page->lru.prev == &zone->free_area[0].free_list[mt] ?
+		   NULL : list_entry(page->lru.prev, struct page, lru);
+	c = add_to_cluster_common(page, zone, neighbor);
+	c->tail = page;
+}
+
 static inline void add_to_buddy_common(struct page *page, struct zone *zone,
 					unsigned int order, int mt)
 {
@@ -765,6 +841,7 @@ static inline void add_to_buddy_head(struct page *page, struct zone *zone,
 {
 	add_to_buddy_common(page, zone, order, mt);
 	list_add(&page->lru, &zone->free_area[order].free_list[mt]);
+	add_to_cluster_head(page, zone, order, mt);
 }
 
 static inline void add_to_buddy_tail(struct page *page, struct zone *zone,
@@ -772,6 +849,7 @@ static inline void add_to_buddy_tail(struct page *page, struct zone *zone,
 {
 	add_to_buddy_common(page, zone, order, mt);
 	list_add_tail(&page->lru, &zone->free_area[order].free_list[mt]);
+	add_to_cluster_tail(page, zone, order, mt);
 }
 
 static inline void rmv_page_order(struct page *page)
@@ -780,9 +858,29 @@ static inline void rmv_page_order(struct page *page)
 	set_page_private(page, 0);
 }
 
+/* called before removed from free_list */
+static inline void remove_from_cluster(struct page *page, struct zone *zone)
+{
+	struct cluster *c = page->cluster;
+	if (!c)
+		return;
+
+	page->cluster = NULL;
+	c->nr--;
+	if (!c->nr) {
+		int bit = c - zone->cluster.array;
+		c->tail = NULL;
+		clear_bit(bit, zone->cluster.bitmap);
+		if (bit < zone->cluster.zero_bit)
+			zone->cluster.zero_bit = bit;
+	} else if (page == c->tail)
+		c->tail = list_entry(page->lru.prev, struct page, lru);
+}
+
 static inline void remove_from_buddy(struct page *page, struct zone *zone,
 					unsigned int order)
 {
+	remove_from_cluster(page, zone);
 	list_del(&page->lru);
 	zone->free_area[order].nr_free--;
 	rmv_page_order(page);
@@ -2025,6 +2123,17 @@ static int move_freepages(struct zone *zone,
 	if (num_movable)
 		*num_movable = 0;
 
+	/*
+	 * Cluster alloced pages may have their PageBuddy flag unclear yet
+	 * after dropping zone->lock in rmqueue_bulk() and steal here could
+	 * move them back to free_list. So it's necessary to wait till all
+	 * those pages have their flags properly cleared.
+	 *
+	 * We do not need to disable cluster alloc though since we already
+	 * held zone->lock and no allocation could happen.
+	 */
+	zone_wait_cluster_alloc(zone);
+
 	for (page = start_page; page <= end_page;) {
 		if (!pfn_valid_within(page_to_pfn(page))) {
 			page++;
@@ -2049,8 +2158,10 @@ static int move_freepages(struct zone *zone,
 		}
 
 		order = page_order(page);
+		remove_from_cluster(page, zone);
 		list_move(&page->lru,
 			  &zone->free_area[order].free_list[migratetype]);
+		add_to_cluster_head(page, zone, order, migratetype);
 		page += 1 << order;
 		pages_moved += 1 << order;
 	}
@@ -2199,7 +2310,9 @@ static void steal_suitable_fallback(struct zone *zone, struct page *page,
 
 single_page:
 	area = &zone->free_area[current_order];
+	remove_from_cluster(page, zone);
 	list_move(&page->lru, &area->free_list[start_type]);
+	add_to_cluster_head(page, zone, current_order, start_type);
 }
 
 /*
@@ -2460,6 +2573,145 @@ retry:
 	return page;
 }
 
+static int __init zone_order0_cluster_init(void)
+{
+	struct zone *zone;
+
+	for_each_zone(zone) {
+		int len, mt, batch;
+		unsigned long flags;
+		struct order0_cluster *cluster;
+
+		if (!managed_zone(zone))
+			continue;
+
+		/* no need to enable cluster allocation for batch<=1 zone */
+		preempt_disable();
+		batch = this_cpu_ptr(zone->pageset)->pcp.batch;
+		preempt_enable();
+		if (batch <= 1)
+			continue;
+
+		cluster = &zone->cluster;
+		/* FIXME: possible overflow of int type */
+		len = DIV_ROUND_UP(zone->managed_pages, batch);
+		cluster->array = vzalloc(len * sizeof(struct cluster));
+		if (!cluster->array)
+			return -ENOMEM;
+		cluster->bitmap = vzalloc(DIV_ROUND_UP(len, BITS_PER_LONG) *
+				sizeof(unsigned long));
+		if (!cluster->bitmap)
+			return -ENOMEM;
+
+		spin_lock_irqsave(&zone->lock, flags);
+		cluster->len = len;
+		for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
+			struct page *page;
+			list_for_each_entry_reverse(page,
+					&zone->free_area[0].free_list[mt], lru)
+				add_to_cluster_head(page, zone, 0, mt);
+		}
+		spin_unlock_irqrestore(&zone->lock, flags);
+	}
+
+	return 0;
+}
+subsys_initcall(zone_order0_cluster_init);
+
+static inline int __rmqueue_bulk_cluster(struct zone *zone, unsigned long count,
+						struct list_head *list, int mt)
+{
+	struct list_head *head = &zone->free_area[0].free_list[mt];
+	int nr = 0;
+
+	while (nr < count) {
+		struct page *head_page;
+		struct list_head *tail, tmp_list;
+		struct cluster *c;
+		int bit;
+
+		head_page = list_first_entry_or_null(head, struct page, lru);
+		if (!head_page || !head_page->cluster)
+			break;
+
+		c = head_page->cluster;
+		tail = &c->tail->lru;
+
+		/* drop the cluster off free_list and attach to list */
+		list_cut_position(&tmp_list, head, tail);
+		list_splice_tail(&tmp_list, list);
+
+		nr += c->nr;
+		zone->free_area[0].nr_free -= c->nr;
+
+		/* this cluster is empty now */
+		c->tail = NULL;
+		c->nr = 0;
+		bit = c - zone->cluster.array;
+		clear_bit(bit, zone->cluster.bitmap);
+		if (bit < zone->cluster.zero_bit)
+			zone->cluster.zero_bit = bit;
+	}
+
+	return nr;
+}
+
+static inline int rmqueue_bulk_cluster(struct zone *zone, unsigned int order,
+				unsigned long count, struct list_head *list,
+				int migratetype)
+{
+	int alloced;
+	struct page *page;
+
+	/*
+	 * Cluster alloc races with merging so don't try cluster alloc when we
+	 * can't skip merging. Note that can_skip_merge() keeps the same return
+	 * value from here till all pages have their flags properly processed,
+	 * i.e. the end of the function where in_progress is incremented, even
+	 * we have dropped the lock in the middle because the only place that
+	 * can change can_skip_merge()'s return value is compaction code and
+	 * compaction needs to wait on in_progress.
+	 */
+	if (!can_skip_merge(zone, 0))
+		return 0;
+
+	/* Cluster alloc is disabled, mostly compaction is already in progress */
+	if (zone->cluster.disable_depth)
+		return 0;
+
+	/* Cluster alloc is disabled for this zone */
+	if (unlikely(!zone->cluster.len))
+		return 0;
+
+	alloced = __rmqueue_bulk_cluster(zone, count, list, migratetype);
+	if (!alloced)
+		return 0;
+
+	/*
+	 * Cache miss on page structure could slow things down
+	 * dramatically so accessing these alloced pages without
+	 * holding lock for better performance.
+	 *
+	 * Since these pages still have PageBuddy set, there is a race
+	 * window between now and when PageBuddy is cleared for them
+	 * below. Any operation that would scan a pageblock and check
+	 * PageBuddy(page), e.g. compaction, will need to wait till all
+	 * such pages are properly processed. in_progress is used for
+	 * such purpose so increase it now before dropping the lock.
+	 */
+	atomic_inc(&zone->cluster.in_progress);
+	spin_unlock(&zone->lock);
+
+	list_for_each_entry(page, list, lru) {
+		rmv_page_order(page);
+		page->cluster = NULL;
+		set_pcppage_migratetype(page, migratetype);
+	}
+	atomic_dec(&zone->cluster.in_progress);
+
+	return alloced;
+}
+
 /*
  * Obtain a specified number of elements from the buddy allocator, all under
  * a single hold of the lock, for efficiency.  Add them to the supplied list.
@@ -2469,16 +2721,22 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 			unsigned long count, struct list_head *list,
 			int migratetype)
 {
-	int i, alloced = 0;
+	int i, alloced;
+	struct page *page, *tmp;
 
 	spin_lock(&zone->lock);
-	for (i = 0; i < count; ++i) {
-		struct page *page = __rmqueue(zone, order, migratetype);
+	alloced = rmqueue_bulk_cluster(zone, order, count, list, migratetype);
+	if (alloced > 0) {
+		if (alloced >= count)
+			goto out;
+		else
+			spin_lock(&zone->lock);
+	}
+
+	for (; alloced < count; alloced++) {
+		page = __rmqueue(zone, order, migratetype);
 		if (unlikely(page == NULL))
 			break;
-
-		if (unlikely(check_pcp_refill(page)))
-			continue;
 
 		/*
 		 * Split buddy pages returned by expand() are received here in
@@ -2491,7 +2749,18 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 		 * pages are ordered properly.
 		 */
 		list_add_tail(&page->lru, list);
-		alloced++;
+	}
+	spin_unlock(&zone->lock);
+
+out:
+	i = alloced;
+	list_for_each_entry_safe(page, tmp, list, lru) {
+		if (unlikely(check_pcp_refill(page))) {
+			list_del(&page->lru);
+			alloced--;
+			continue;
+		}
+
 		if (is_migrate_cma(get_pcppage_migratetype(page)))
 			__mod_zone_page_state(zone, NR_FREE_CMA_PAGES,
 					      -(1 << order));
@@ -2504,7 +2773,6 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	 * pages added to the pcp list.
 	 */
 	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order));
-	spin_unlock(&zone->lock);
 	return alloced;
 }
 
@@ -7744,6 +8012,7 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	unsigned long outer_start, outer_end;
 	unsigned int order;
 	int ret = 0;
+	struct zone *zone = page_zone(pfn_to_page(start));
 
 	struct compact_control cc = {
 		.nr_migratepages = 0,
@@ -7786,6 +8055,7 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	if (ret)
 		return ret;
 
+	zone_wait_and_disable_cluster_alloc(zone);
 	/*
 	 * In case of -EBUSY, we'd like to know which page causes problem.
 	 * So, just fall through. test_pages_isolated() has a tracepoint
@@ -7868,6 +8138,8 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 done:
 	undo_isolate_page_range(pfn_max_align_down(start),
 				pfn_max_align_up(end), migratetype);
+
+	zone_enable_cluster_alloc(zone);
 	return ret;
 }
 
