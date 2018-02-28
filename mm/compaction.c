@@ -776,8 +776,19 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * potential isolation targets.
 		 */
 		if (PageBuddy(page)) {
-			unsigned long freepage_order = page_order_unsafe(page);
+			unsigned long freepage_order;
 
+			/*
+			 * If this is a merge_skipped page, do merge now
+			 * since high-order pages are needed. zone lock
+			 * isn't taken for the merge_skipped check so the
+			 * check could be wrong but the worst case is we
+			 * lose a merge opportunity.
+			 */
+			if (page_merge_was_skipped(page))
+				try_to_merge_page(page);
+
+			freepage_order = page_order_unsafe(page);
 			/*
 			 * Without lock, we cannot be sure that what we got is
 			 * a valid page order. Consider only values in the

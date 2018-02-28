@@ -538,4 +538,31 @@ static inline bool is_migrate_highatomic_page(struct page *page)
 }
 
 void setup_zone_pageset(struct zone *zone);
+
+static inline bool page_merge_was_skipped(struct page *page)
+{
+	return page->buddy_merge_skipped;
+}
+
+void try_to_merge_page(struct page *page);
+
+#ifdef CONFIG_COMPACTION
+static inline bool can_skip_merge(struct zone *zone, int order)
+{
+	/* Compaction has failed in this zone, we shouldn't skip merging */
+	if (zone->compact_considered)
+		return false;
+
+	/* Only consider no_merge for order 0 pages */
+	if (order)
+		return false;
+
+	return true;
+}
+#else /* CONFIG_COMPACTION */
+static inline bool can_skip_merge(struct zone *zone, int order)
+{
+	return false;
+}
+#endif  /* CONFIG_COMPACTION */
 #endif	/* __MM_INTERNAL_H */

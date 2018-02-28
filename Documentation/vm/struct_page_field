@@ -1,0 +1,5 @@
+buddy_merge_skipped:
+Used to indicate this page skipped merging when added to buddy. This
+field only makes sense if the page is in Buddy and is order zero.
+It's a bug if any higher order pages in Buddy has this field set.
+Shares space with index.

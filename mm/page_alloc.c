@@ -730,6 +730,16 @@ static inline void clear_page_guard(struct zone *zone, struct page *page,
 				unsigned int order, int migratetype) {}
 #endif
 
+static inline void set_page_merge_skipped(struct page *page)
+{
+	page->buddy_merge_skipped = true;
+}
+
+static inline void clear_page_merge_skipped(struct page *page)
+{
+	page->buddy_merge_skipped = false;
+}
+
 static inline void set_page_order(struct page *page, unsigned int order)
 {
 	set_page_private(page, order);
@@ -739,6 +749,13 @@ static inline void set_page_order(struct page *page, unsigned int order)
 static inline void add_to_buddy_common(struct page *page, struct zone *zone,
 					unsigned int order, int mt)
 {
+	/*
+	 * Always clear buddy_merge_skipped when added to buddy because
+	 * buddy_merge_skipped shares space with index and index could
+	 * be used as migratetype for PCP pages.
+	 */
+	clear_page_merge_skipped(page);
+
 	set_page_order(page, order);
 	zone->free_area[order].nr_free++;
 }
@@ -769,6 +786,7 @@ static inline void remove_from_buddy(struct page *page, struct zone *zone,
 	list_del(&page->lru);
 	zone->free_area[order].nr_free--;
 	rmv_page_order(page);
+	clear_page_merge_skipped(page);
 }
 
 /*
@@ -839,7 +857,7 @@ static inline int page_is_buddy(struct page *page, struct page *buddy,
  * -- nyc
  */
 
-static inline void __free_one_page(struct page *page,
+static inline void do_merge(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
 		int migratetype)
@@ -850,16 +868,6 @@ static inline void __free_one_page(struct page *page,
 	unsigned int max_order;
 
 	max_order = min_t(unsigned int, MAX_ORDER, pageblock_order + 1);
-
-	VM_BUG_ON(!zone_is_initialized(zone));
-	VM_BUG_ON_PAGE(page->flags & PAGE_FLAGS_CHECK_AT_PREP, page);
-
-	VM_BUG_ON(migratetype == -1);
-	if (likely(!is_migrate_isolate(migratetype)))
-		__mod_zone_freepage_state(zone, 1 << order, migratetype);
-
-	VM_BUG_ON_PAGE(pfn & ((1 << order) - 1), page);
-	VM_BUG_ON_PAGE(bad_range(zone, page), page);
 
 continue_merging:
 	while (order < max_order - 1) {
@@ -932,6 +940,61 @@ done_merging:
 
 	add_to_buddy_head(page, zone, order, migratetype);
 }
+
+void try_to_merge_page(struct page *page)
+{
+	unsigned long pfn, buddy_pfn, flags;
+	struct page *buddy;
+	struct zone *zone;
+
+	/*
+	 * No need to do merging if buddy is not free.
+	 * zone lock isn't taken so this could be wrong but worst case
+	 * is we lose a merge opportunity.
+	 */
+	pfn = page_to_pfn(page);
+	buddy_pfn = __find_buddy_pfn(pfn, 0);
+	buddy = page + (buddy_pfn - pfn);
+	if (!PageBuddy(buddy))
+		return;
+
+	zone = page_zone(page);
+	spin_lock_irqsave(&zone->lock, flags);
+	/* Verify again after taking the lock */
+	if (likely(PageBuddy(page) && page_merge_was_skipped(page) &&
+		   PageBuddy(buddy))) {
+		int mt = get_pageblock_migratetype(page);
+
+		remove_from_buddy(page, zone, 0);
+		do_merge(page, pfn, zone, 0, mt);
+	}
+	spin_unlock_irqrestore(&zone->lock, flags);
+}
+
+static inline void __free_one_page(struct page *page,
+		unsigned long pfn,
+		struct zone *zone, unsigned int order,
+		int migratetype)
+{
+	VM_BUG_ON(!zone_is_initialized(zone));
+	VM_BUG_ON_PAGE(page->flags & PAGE_FLAGS_CHECK_AT_PREP, page);
+
+	VM_BUG_ON(migratetype == -1);
+	if (likely(!is_migrate_isolate(migratetype)))
+		__mod_zone_freepage_state(zone, 1 << order, migratetype);
+
+	VM_BUG_ON_PAGE(pfn & ((1 << order) - 1), page);
+	VM_BUG_ON_PAGE(bad_range(zone, page), page);
+
+	if (can_skip_merge(zone, order)) {
+		add_to_buddy_head(page, zone, 0, migratetype);
+		set_page_merge_skipped(page);
+		return;
+	}
+
+	do_merge(page, pfn, zone, order, migratetype);
+}
+
 
 /*
  * A bad page could be due to a number of fields. Instead of multiple branches,
@@ -1183,8 +1246,10 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			 * can be offset by reduced memory latency later. To
 			 * avoid excessive prefetching due to large count, only
 			 * prefetch buddy for the last pcp->batch nr of pages.
+			 *
+			 * If merge can be skipped, no need to prefetch buddy.
 			 */
-			if (count > pcp->batch)
+			if (can_skip_merge(zone, 0) || count > pcp->batch)
 				continue;
 			pfn = page_to_pfn(page);
 			buddy_pfn = __find_buddy_pfn(pfn, 0);
