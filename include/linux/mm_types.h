@@ -93,6 +93,7 @@ struct page {
 		pgoff_t index;		/* Our offset within mapping. */
 		void *freelist;		/* sl[aou]b first free object */
 		/* page_deferred_list().prev	-- second tail page */
+		bool buddy_merge_skipped; /* skipped merging when added to buddy */
 	};
 
 	union {
