@@ -179,8 +179,13 @@ struct page {
 		int units;			/* SLOB */
 	};
 
-	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
-	atomic_t _refcount;
+	union {
+		/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
+		atomic_t _refcount;
+
+		/* For pages in Buddy: if skipped merging when added to Buddy */
+		bool buddy_merge_skipped;
+	};
 
 #ifdef CONFIG_MEMCG
 	struct mem_cgroup *mem_cgroup;
