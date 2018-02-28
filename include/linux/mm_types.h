@@ -85,8 +85,14 @@ struct page {
 			 */
 			struct list_head lru;
 			/* See page-flags.h for PAGE_MAPPING_FLAGS */
-			struct address_space *mapping;
-			pgoff_t index;		/* Our offset within mapping. */
+			union {
+				struct address_space *mapping;
+				struct cluster *cluster;
+			};
+			union {
+				pgoff_t index;		/* Our offset within mapping. */
+				bool buddy_merge_skipped;
+			};
 			/**
 			 * @private: Mapping-private opaque data.
 			 * Usually used for buffer_heads if PagePrivate.
@@ -179,13 +185,8 @@ struct page {
 		int units;			/* SLOB */
 	};
 
-	union {
-		/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
-		atomic_t _refcount;
-
-		/* For pages in Buddy: if skipped merging when added to Buddy */
-		bool buddy_merge_skipped;
-	};
+	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
+	atomic_t _refcount;
 
 #ifdef CONFIG_MEMCG
 	struct mem_cgroup *mem_cgroup;
