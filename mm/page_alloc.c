@@ -1116,7 +1116,7 @@ static inline void prefetch_buddy(struct page *page)
 	buddy_pfn = __find_buddy_pfn(pfn, 0);
 	buddy = page + (buddy_pfn - pfn);
 	asm (
-		"prefetcht0 %0\n\t"
+		"prefetcht2 %0\n\t"
 		:
 		: "m" (*(const char *)buddy));
 }
