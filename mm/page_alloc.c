@@ -1325,7 +1325,7 @@ static inline bool free_cluster_pages(struct zone *zone, struct list_head *list,
 static void free_pcppages_bulk(struct zone *zone, int count,
 					struct per_cpu_pages *pcp)
 {
-	int migratetype = MIGRATE_MOVABLE;
+	int migratetype = 0, i, count_mt[MIGRATE_PCPTYPES] = {0};
 	int batch_free = 0, saved_count = count;
 	bool isolated_pageblocks, single_mt = false;
 	struct page *page, *tmp;
@@ -1349,11 +1349,9 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		} while (list_empty(list));
 
 		/* This is the only non-empty list. Free them all. */
-		if (batch_free == MIGRATE_PCPTYPES) {
+		if (batch_free == MIGRATE_PCPTYPES)
 			batch_free = count;
-			if (batch_free == saved_count)
-				single_mt = true;
-		}
+		count_mt[migratetype] += batch_free;
 
 		do {
 			unsigned long pfn, buddy_pfn;
@@ -1387,6 +1385,13 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			buddy = page + (buddy_pfn - pfn);
 			prefetch(buddy);
 		} while (--count && --batch_free && !list_empty(list));
+	}
+
+	for (i = 0; i < MIGRATE_PCPTYPES; i++) {
+		if (count_mt[i] == saved_count) {
+			single_mt = true;
+			break;
+		}
 	}
 
 	spin_lock(&zone->lock);
