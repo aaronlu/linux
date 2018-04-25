@@ -549,10 +549,6 @@ void try_to_merge_page(struct page *page);
 #ifdef CONFIG_COMPACTION
 static inline bool can_skip_merge(struct zone *zone, int order)
 {
-	/* Compaction has failed in this zone, we shouldn't skip merging */
-	if (zone->compact_considered)
-		return false;
-
 	/* Only consider no_merge for order 0 pages */
 	if (order)
 		return false;
