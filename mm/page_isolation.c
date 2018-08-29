@@ -26,7 +26,7 @@ static int set_migratetype_isolate(struct page *page, int migratetype,
 
 	zone = page_zone(page);
 
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 
 	/*
 	 * We assume the caller intended to SET migrate type to isolate.
@@ -82,7 +82,7 @@ out:
 		__mod_zone_freepage_state(zone, -nr_pages, mt);
 	}
 
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 	if (!ret)
 		drain_all_pages(zone);
 	return ret;
@@ -98,7 +98,7 @@ static void unset_migratetype_isolate(struct page *page, unsigned migratetype)
 	struct page *buddy;
 
 	zone = page_zone(page);
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 	if (!is_migrate_isolate_page(page))
 		goto out;
 
@@ -137,7 +137,7 @@ static void unset_migratetype_isolate(struct page *page, unsigned migratetype)
 	set_pageblock_migratetype(page, migratetype);
 	zone->nr_isolate_pageblock--;
 out:
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 	if (isolated_page) {
 		post_alloc_hook(page, order, __GFP_MOVABLE);
 		__free_pages(page, order);
@@ -299,10 +299,10 @@ int test_pages_isolated(unsigned long start_pfn, unsigned long end_pfn,
 		return -EBUSY;
 	/* Check all pages are free or marked as ISOLATED */
 	zone = page_zone(page);
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 	pfn = __test_page_isolated_in_pageblock(start_pfn, end_pfn,
 						skip_hwpoisoned_pages);
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 
 	trace_test_pages_isolated(start_pfn, end_pfn, pfn);
 

@@ -347,20 +347,20 @@ static inline void update_pageblock_skip(struct compact_control *cc,
  * Returns true if the lock is held
  * Returns false if the lock is not held and compaction should abort
  */
-static bool compact_trylock_irqsave(spinlock_t *lock, unsigned long *flags,
-						struct compact_control *cc)
-{
-	if (cc->mode == MIGRATE_ASYNC) {
-		if (!spin_trylock_irqsave(lock, *flags)) {
-			cc->contended = true;
-			return false;
-		}
-	} else {
-		spin_lock_irqsave(lock, *flags);
-	}
-
-	return true;
-}
+#define compact_trylock(lock, flags, cc, lockf, trylockf)		       \
+({									       \
+	bool __ret = true;						       \
+	if ((cc)->mode == MIGRATE_ASYNC) {				       \
+		if (!trylockf((lock), *(flags))) {			       \
+			(cc)->contended = true;				       \
+			__ret = false;					       \
+		}							       \
+	} else {							       \
+		lockf((lock), *(flags));				       \
+	}								       \
+									       \
+	__ret;								       \
+})
 
 /*
  * Compaction requires the taking of some coarse locks that are potentially
@@ -377,29 +377,29 @@ static bool compact_trylock_irqsave(spinlock_t *lock, unsigned long *flags,
  * Returns false when compaction can continue (sync compaction might have
  *		scheduled)
  */
-static bool compact_unlock_should_abort(spinlock_t *lock,
-		unsigned long flags, bool *locked, struct compact_control *cc)
-{
-	if (*locked) {
-		spin_unlock_irqrestore(lock, flags);
-		*locked = false;
-	}
-
-	if (fatal_signal_pending(current)) {
-		cc->contended = true;
-		return true;
-	}
-
-	if (need_resched()) {
-		if (cc->mode == MIGRATE_ASYNC) {
-			cc->contended = true;
-			return true;
-		}
-		cond_resched();
-	}
-
-	return false;
-}
+#define compact_unlock_should_abort(lock, flags, locked, cc, unlockf)	       \
+({									       \
+	bool __ret = false;						       \
+									       \
+	if (*(locked)) {						       \
+		unlockf((lock), (flags));				       \
+		*(locked) = false;					       \
+	}								       \
+									       \
+	if (fatal_signal_pending(current)) {				       \
+		(cc)->contended = true;					       \
+		__ret = true;						       \
+	} else if (need_resched()) {					       \
+		if ((cc)->mode == MIGRATE_ASYNC) {			       \
+			(cc)->contended = true;				       \
+			__ret = true;					       \
+		} else {						       \
+			cond_resched();					       \
+		}							       \
+	}								       \
+									       \
+	__ret;								       \
+})
 
 /*
  * Aside from avoiding lock contention, compaction also periodically checks
@@ -457,7 +457,7 @@ static unsigned long isolate_freepages_block(struct compact_control *cc,
 		 */
 		if (!(blockpfn % SWAP_CLUSTER_MAX)
 		    && compact_unlock_should_abort(&cc->zone->lock, flags,
-								&locked, cc))
+					&locked, cc, write_unlock_irqrestore))
 			break;
 
 		nr_scanned++;
@@ -502,8 +502,9 @@ static unsigned long isolate_freepages_block(struct compact_control *cc,
 			 * spin on the lock and we acquire the lock as late as
 			 * possible.
 			 */
-			locked = compact_trylock_irqsave(&cc->zone->lock,
-								&flags, cc);
+			locked = compact_trylock(&cc->zone->lock, &flags, cc,
+						 write_lock_irqsave,
+						 write_trylock_irqsave);
 			if (!locked)
 				break;
 
@@ -541,7 +542,7 @@ isolate_fail:
 	}
 
 	if (locked)
-		spin_unlock_irqrestore(&cc->zone->lock, flags);
+		write_unlock_irqrestore(&cc->zone->lock, flags);
 
 	/*
 	 * There is a tiny chance that we have read bogus compound_order(),
@@ -758,7 +759,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 */
 		if (!(low_pfn % SWAP_CLUSTER_MAX)
 		    && compact_unlock_should_abort(zone_lru_lock(zone), flags,
-								&locked, cc))
+					&locked, cc, spin_unlock_irqrestore))
 			break;
 
 		if (!pfn_valid_within(low_pfn))
@@ -847,8 +848,9 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 
 		/* If we already hold the lock, we can skip some rechecking */
 		if (!locked) {
-			locked = compact_trylock_irqsave(zone_lru_lock(zone),
-								&flags, cc);
+			locked = compact_trylock(zone_lru_lock(zone), &flags, cc,
+						 spin_lock_irqsave,
+						 spin_trylock_irqsave);
 			if (!locked)
 				break;
 

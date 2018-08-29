@@ -1339,10 +1339,10 @@ static void walk_zones_in_node(struct seq_file *m, pg_data_t *pgdat,
 			continue;
 
 		if (!nolock)
-			spin_lock_irqsave(&zone->lock, flags);
+			write_lock_irqsave(&zone->lock, flags);
 		print(m, pgdat, zone);
 		if (!nolock)
-			spin_unlock_irqrestore(&zone->lock, flags);
+			write_unlock_irqrestore(&zone->lock, flags);
 	}
 }
 #endif

@@ -1133,7 +1133,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		} while (--count && --batch_free && !list_empty(list));
 	}
 
-	spin_lock(&zone->lock);
+	write_lock(&zone->lock);
 	isolated_pageblocks = has_isolate_pageblock(zone);
 
 	/*
@@ -1151,7 +1151,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
 		trace_mm_page_pcpu_drain(page, 0, mt);
 	}
-	spin_unlock(&zone->lock);
+	write_unlock(&zone->lock);
 }
 
 static void free_one_page(struct zone *zone,
@@ -1159,13 +1159,13 @@ static void free_one_page(struct zone *zone,
 				unsigned int order,
 				int migratetype)
 {
-	spin_lock(&zone->lock);
+	write_lock(&zone->lock);
 	if (unlikely(has_isolate_pageblock(zone) ||
 		is_migrate_isolate(migratetype))) {
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
 	__free_one_page(page, pfn, zone, order, migratetype);
-	spin_unlock(&zone->lock);
+	write_unlock(&zone->lock);
 }
 
 static void __meminit __init_single_page(struct page *page, unsigned long pfn,
@@ -2251,7 +2251,7 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 	if (zone->nr_reserved_highatomic >= max_managed)
 		return;
 
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 
 	/* Recheck the nr_reserved_highatomic limit under the lock */
 	if (zone->nr_reserved_highatomic >= max_managed)
@@ -2267,7 +2267,7 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 	}
 
 out_unlock:
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 }
 
 /*
@@ -2300,7 +2300,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 					pageblock_nr_pages)
 			continue;
 
-		spin_lock_irqsave(&zone->lock, flags);
+		write_lock_irqsave(&zone->lock, flags);
 		for (order = 0; order < MAX_ORDER; order++) {
 			struct free_area *area = &(zone->free_area[order]);
 
@@ -2343,11 +2343,11 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 			ret = move_freepages_block(zone, page, ac->migratetype,
 									NULL);
 			if (ret) {
-				spin_unlock_irqrestore(&zone->lock, flags);
+				write_unlock_irqrestore(&zone->lock, flags);
 				return ret;
 			}
 		}
-		spin_unlock_irqrestore(&zone->lock, flags);
+		write_unlock_irqrestore(&zone->lock, flags);
 	}
 
 	return false;
@@ -2465,7 +2465,7 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 {
 	int i, alloced = 0;
 
-	spin_lock(&zone->lock);
+	write_lock(&zone->lock);
 	for (i = 0; i < count; ++i) {
 		struct page *page = __rmqueue(zone, order, migratetype);
 		if (unlikely(page == NULL))
@@ -2498,7 +2498,7 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	 * pages added to the pcp list.
 	 */
 	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order));
-	spin_unlock(&zone->lock);
+	write_unlock(&zone->lock);
 	return alloced;
 }
 
@@ -2687,7 +2687,7 @@ void mark_free_pages(struct zone *zone)
 	if (zone_is_empty(zone))
 		return;
 
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 
 	max_zone_pfn = zone_end_pfn(zone);
 	for (pfn = zone->zone_start_pfn; pfn < max_zone_pfn; pfn++)
@@ -2721,7 +2721,7 @@ void mark_free_pages(struct zone *zone)
 			}
 		}
 	}
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 }
 #endif /* CONFIG_PM */
 
@@ -2990,7 +2990,7 @@ struct page *rmqueue(struct zone *preferred_zone,
 	 * allocate greater than order-1 page units with __GFP_NOFAIL.
 	 */
 	WARN_ON_ONCE((gfp_flags & __GFP_NOFAIL) && (order > 1));
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 
 	do {
 		page = NULL;
@@ -3002,7 +3002,7 @@ struct page *rmqueue(struct zone *preferred_zone,
 		if (!page)
 			page = __rmqueue(zone, order, migratetype);
 	} while (page && check_new_pages(page, order));
-	spin_unlock(&zone->lock);
+	write_unlock(&zone->lock);
 	if (!page)
 		goto failed;
 	__mod_zone_freepage_state(zone, -(1 << order),
@@ -5009,7 +5009,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		show_node(zone);
 		printk(KERN_CONT "%s: ", zone->name);
 
-		spin_lock_irqsave(&zone->lock, flags);
+		write_lock_irqsave(&zone->lock, flags);
 		for (order = 0; order < MAX_ORDER; order++) {
 			struct free_area *area = &zone->free_area[order];
 			int type;
@@ -5023,7 +5023,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 					types[order] |= 1 << type;
 			}
 		}
-		spin_unlock_irqrestore(&zone->lock, flags);
+		write_unlock_irqrestore(&zone->lock, flags);
 		for (order = 0; order < MAX_ORDER; order++) {
 			printk(KERN_CONT "%lu*%lukB ",
 			       nr[order], K(1UL) << order);
@@ -6235,7 +6235,7 @@ static void __meminit zone_init_internals(struct zone *zone, enum zone_type idx,
 	zone_set_nid(zone, nid);
 	zone->name = zone_names[idx];
 	zone->zone_pgdat = NODE_DATA(nid);
-	spin_lock_init(&zone->lock);
+	rwlock_init(&zone->lock);
 	zone_seqlock_init(zone);
 	zone_pcp_init(zone);
 }
@@ -7227,7 +7227,7 @@ static void __setup_per_zone_wmarks(void)
 	for_each_zone(zone) {
 		u64 tmp;
 
-		spin_lock_irqsave(&zone->lock, flags);
+		write_lock_irqsave(&zone->lock, flags);
 		tmp = (u64)pages_min * zone->managed_pages;
 		do_div(tmp, lowmem_pages);
 		if (is_highmem(zone)) {
@@ -7265,7 +7265,7 @@ static void __setup_per_zone_wmarks(void)
 		zone->watermark[WMARK_LOW]  = min_wmark_pages(zone) + tmp;
 		zone->watermark[WMARK_HIGH] = min_wmark_pages(zone) + tmp * 2;
 
-		spin_unlock_irqrestore(&zone->lock, flags);
+		write_unlock_irqrestore(&zone->lock, flags);
 	}
 
 	/* update totalreserve_pages */
@@ -8033,7 +8033,7 @@ __offline_isolated_pages(unsigned long start_pfn, unsigned long end_pfn)
 		return;
 	offline_mem_sections(pfn, end_pfn);
 	zone = page_zone(pfn_to_page(pfn));
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 	pfn = start_pfn;
 	while (pfn < end_pfn) {
 		if (!pfn_valid(pfn)) {
@@ -8065,7 +8065,7 @@ __offline_isolated_pages(unsigned long start_pfn, unsigned long end_pfn)
 			SetPageReserved((page+i));
 		pfn += (1 << order);
 	}
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 }
 #endif
 
@@ -8076,14 +8076,14 @@ bool is_free_buddy_page(struct page *page)
 	unsigned long flags;
 	unsigned int order;
 
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 	for (order = 0; order < MAX_ORDER; order++) {
 		struct page *page_head = page - (pfn & ((1 << order) - 1));
 
 		if (PageBuddy(page_head) && page_order(page_head) >= order)
 			break;
 	}
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 
 	return order < MAX_ORDER;
 }
@@ -8102,7 +8102,7 @@ bool set_hwpoison_free_buddy_page(struct page *page)
 	unsigned int order;
 	bool hwpoisoned = false;
 
-	spin_lock_irqsave(&zone->lock, flags);
+	write_lock_irqsave(&zone->lock, flags);
 	for (order = 0; order < MAX_ORDER; order++) {
 		struct page *page_head = page - (pfn & ((1 << order) - 1));
 
@@ -8112,7 +8112,7 @@ bool set_hwpoison_free_buddy_page(struct page *page)
 			break;
 		}
 	}
-	spin_unlock_irqrestore(&zone->lock, flags);
+	write_unlock_irqrestore(&zone->lock, flags);
 
 	return hwpoisoned;
 }
