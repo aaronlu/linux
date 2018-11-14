@@ -439,7 +439,7 @@ static int __init crash_save_vmcoreinfo_init(void)
 	VMCOREINFO_OFFSET(pglist_data, node_start_pfn);
 	VMCOREINFO_OFFSET(pglist_data, node_spanned_pages);
 	VMCOREINFO_OFFSET(pglist_data, node_id);
-	VMCOREINFO_OFFSET(zone, free_area);
+	VMCOREINFO_OFFSET(zone, ranges);
 	VMCOREINFO_OFFSET(zone, vm_stat);
 	VMCOREINFO_OFFSET(zone, spanned_pages);
 	VMCOREINFO_OFFSET(free_area, free_list);
@@ -447,7 +447,7 @@ static int __init crash_save_vmcoreinfo_init(void)
 	VMCOREINFO_OFFSET(list_head, prev);
 	VMCOREINFO_OFFSET(vmap_area, va_start);
 	VMCOREINFO_OFFSET(vmap_area, list);
-	VMCOREINFO_LENGTH(zone.free_area, MAX_ORDER);
+	VMCOREINFO_LENGTH(zone.ranges.free_area, MAX_ORDER);
 	log_buf_vmcoreinfo_setup();
 	VMCOREINFO_LENGTH(free_area.free_list, MIGRATE_TYPES);
 	VMCOREINFO_NUMBER(NR_FREE_PAGES);

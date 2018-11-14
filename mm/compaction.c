@@ -1316,6 +1316,7 @@ static enum compact_result __compact_finished(struct zone *zone,
 {
 	unsigned int order;
 	const int migratetype = cc->migratetype;
+	struct free_area_range *range;
 
 	if (cc->contended || fatal_signal_pending(current))
 		return COMPACT_CONTENDED;
@@ -1355,8 +1356,9 @@ static enum compact_result __compact_finished(struct zone *zone,
 	}
 
 	/* Direct compactor: Is a suitable page free? */
-	for (order = cc->order; order < MAX_ORDER; order++) {
-		struct free_area *area = &zone->free_area[order];
+	order = cc->order;
+	zone_for_each_order_continue_range(zone, order, range) {
+		struct free_area *area = &range->free_area[order];
 		bool can_steal;
 
 		/* Job done if page is free of the right migratetype */

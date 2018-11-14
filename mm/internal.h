@@ -527,4 +527,58 @@ static inline bool is_migrate_highatomic_page(struct page *page)
 
 void setup_zone_pageset(struct zone *zone);
 extern struct page *alloc_new_node_page(struct page *page, unsigned long node);
+
+static inline struct free_area_range *page_range(struct page *page)
+{
+	struct zone *zone = page_zone(page);
+	unsigned long start_pfn = zone->zone_start_pfn;
+	unsigned long pfn = page_to_pfn(page);
+	unsigned int idx = (pfn - start_pfn) >> zone->range_order;
+
+	BUG_ON(idx >= zone->range_nr);
+	return &zone->ranges[idx];
+}
+
+#define zone_for_each_range(zone, range)			\
+	for (range = zone->ranges;				\
+	     range - zone->ranges < zone->range_nr;		\
+	     range++)
+
+#define zone_for_each_order_range(zone, order, range)			\
+	for (order = 0; order < MAX_ORDER; order++)			\
+		for (range = zone->ranges;				\
+		     range - zone->ranges < zone->range_nr;		\
+		     range++)
+
+#define zone_for_each_order_continue_range(zone, order, range)		\
+	for (; order < MAX_ORDER; order++)				\
+		for (range = zone->ranges;				\
+		     range - zone->ranges < zone->range_nr;		\
+		     range++)
+
+static inline unsigned long zone_order_nr_free(struct zone *zone, unsigned int order)
+{
+	struct free_area_range *range;
+	unsigned long nr_free = 0;
+
+	zone_for_each_range(zone, range)
+		nr_free += range->free_area[order].nr_free;
+
+	return nr_free;
+}
+
+static inline unsigned long zone_order_mt_nr_free(struct zone *zone, unsigned int order, int mt)
+{
+	struct free_area_range *range;
+	unsigned long nr_free = 0;
+
+	zone_for_each_range(zone, range) {
+		struct list_head *curr;
+
+		list_for_each(curr, &range->free_area[order].free_list[mt])
+			nr_free++;
+	}
+
+	return nr_free;
+}
 #endif	/* __MM_INTERNAL_H */

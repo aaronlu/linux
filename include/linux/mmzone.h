@@ -356,6 +356,26 @@ enum zone_type {
 
 #ifndef __GENERATING_BOUNDS_H
 
+struct free_area_range {
+	/* free areas of different sizes */
+	struct free_area        free_area[MAX_ORDER];
+	struct zone             *zone;
+
+	spinlock_t              lock;
+};
+
+/*
+ * According to will-it-scale/page_fault1 process mode test, lock contention
+ * is about 1% when 8 CPUs are contending for the same zone. Thus, the number
+ * of range can be calculated to equal to (nr_cpus_per_node / 8). The problem
+ * is, initialization of zone->ranges happens before SMP and we can't tell how
+ * many CPUs the system has at that time, so use a fixed number 8 for now.
+ *
+ * TODO: do not use array but pointer for zone->ranges and calculate the best
+ * range number for a zone according to CPU number.
+ */
+#define MAX_FREE_AREA_RANGE_NR 8
+
 struct zone {
 	/* Read-mostly fields */
 
@@ -458,8 +478,14 @@ struct zone {
 	/* Write-intensive fields used from the page allocator */
 	ZONE_PADDING(_pad1_)
 
-	/* free areas of different sizes */
-	struct free_area	free_area[MAX_ORDER];
+	struct free_area_range ranges[MAX_FREE_AREA_RANGE_NR];
+	/*
+	 * actual free area range number: MAX_FREE_AREA_RANGE_NR
+	 * for normal zones, 1 for others.
+	 */
+	int range_nr;
+	/* order of the range */
+	int range_order;
 
 	/* zone flags, see below */
 	unsigned long		flags;
