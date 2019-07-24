@@ -1015,6 +1015,7 @@ static inline raw_spinlock_t *rq_lockp(struct rq *rq)
 }
 
 extern void queue_core_balance(struct rq *rq);
+extern bool prio_less_fair(struct task_struct *a, struct task_struct *b);
 
 #else /* !CONFIG_SCHED_CORE */
 

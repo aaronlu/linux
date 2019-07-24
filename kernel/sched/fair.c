@@ -602,6 +602,27 @@ static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
 	return delta;
 }
 
+bool prio_less_fair(struct task_struct *a, struct task_struct *b)
+{
+	u64 a_vruntime = a->se.vruntime;
+	u64 b_vruntime = b->se.vruntime;
+
+	/*
+	 * Normalize the vruntime if tasks are in different cpus.
+	 */
+	if (task_cpu(a) != task_cpu(b)) {
+		b_vruntime -= task_cfs_rq(b)->min_vruntime;
+		b_vruntime += task_cfs_rq(a)->min_vruntime;
+
+		trace_printk("(%d:%Lu,%Lu,%Lu) <> (%d:%Lu,%Lu,%Lu)\n",
+			     a->pid, a_vruntime, a->se.vruntime, task_cfs_rq(a)->min_vruntime,
+			     b->pid, b_vruntime, b->se.vruntime, task_cfs_rq(b)->min_vruntime);
+
+	}
+
+	return !((s64)(a_vruntime - b_vruntime) <= 0);
+}
+
 /*
  * The idea is to set a period in which each task runs once.
  *
