@@ -209,6 +209,46 @@ static struct task_struct *sched_core_next(struct task_struct *p, unsigned long 
 	return p;
 }
 
+void account_core_idletime(struct task_struct *p, u64 exec)
+{
+	const struct cpumask *smt_mask;
+	struct rq *rq;
+	bool force_idle, refill;
+	int i, cpu;
+
+	rq = task_rq(p);
+	if (!sched_core_enabled(rq))
+		return;
+
+	cpu = task_cpu(p);
+	force_idle = false;
+	refill = true;
+	smt_mask = cpu_smt_mask(cpu);
+
+	for_each_cpu(i, smt_mask) {
+		if (cpu == i || cpu_is_offline(i))
+			continue;
+
+		if (cpu_rq(i)->core_forceidle)
+			force_idle = true;
+
+		/* Only refill if everyone has run out of allowance */
+		if (cpu_rq(i)->core_idle_allowance > 0)
+			refill = false;
+	}
+
+	if (force_idle)
+		rq->core_idle_allowance -= (s64) exec;
+
+	if (rq->core_idle_allowance < 0 && refill) {
+		for_each_cpu(i, smt_mask) {
+			if (cpu_is_offline(i))
+				continue;
+			cpu_rq(i)->core_idle_allowance += (s64) SCHED_IDLE_ALLOWANCE;
+		}
+	}
+}
+
 /*
  * The static-key + stop-machine variable are needed such that:
  *
@@ -275,6 +315,8 @@ void sched_core_put(void)
 
 static inline void sched_core_enqueue(struct rq *rq, struct task_struct *p) { }
 static inline void sched_core_dequeue(struct rq *rq, struct task_struct *p) { }
+static inline void account_core_idletime(struct task_struct *p, u64 exec) { }
+{
 
 #endif /* CONFIG_SCHED_CORE */
 
@@ -6756,6 +6798,7 @@ void __init sched_init(void)
 		rq->core_enabled = 0;
 		rq->core_tree = RB_ROOT;
 		rq->core_forceidle = false;
+		rq->core_idle_allowance = (s64) SCHED_IDLE_ALLOWANCE;
 
 		rq->core_cookie = 0UL;
 #endif

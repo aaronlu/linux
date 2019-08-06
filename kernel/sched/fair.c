@@ -611,6 +611,16 @@ bool prio_less_fair(struct task_struct *a, struct task_struct *b)
 	 * Normalize the vruntime if tasks are in different cpus.
 	 */
 	if (task_cpu(a) != task_cpu(b)) {
+
+		if (a->core_cookie != b->core_cookie) {
+			/*
+			 * Will be force idling one thread,
+			 * pick the thread that has more allowance.
+			 */
+			return (task_rq(a)->core_idle_allowance <
+				task_rq(b)->core_idle_allowance) ? true : false;
+		}
+
 		b_vruntime -= task_cfs_rq(b)->min_vruntime;
 		b_vruntime += task_cfs_rq(a)->min_vruntime;
 
@@ -817,6 +827,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
 		trace_sched_stat_runtime(curtask, delta_exec, curr->vruntime);
 		cgroup_account_cputime(curtask, delta_exec);
 		account_group_exec_runtime(curtask, delta_exec);
+		account_core_idletime(curtask, delta_exec);
 	}
 
 	account_cfs_rq_runtime(cfs_rq, delta_exec);

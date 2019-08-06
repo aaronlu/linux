@@ -1175,6 +1175,7 @@ static void update_curr_dl(struct rq *rq)
 
 	curr->se.sum_exec_runtime += delta_exec;
 	account_group_exec_runtime(curr, delta_exec);
+	account_core_idletime(curr, delta_exec);
 
 	curr->se.exec_start = now;
 	cgroup_account_cputime(curr, delta_exec);

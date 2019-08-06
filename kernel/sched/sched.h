@@ -963,6 +963,7 @@ struct rq {
 	struct task_struct	*core_pick;
 	unsigned int		core_enabled;
 	unsigned int		core_sched_seq;
+	s64			core_idle_allowance;
 	struct rb_root		core_tree;
 	bool			core_forceidle;
 
@@ -999,6 +1000,8 @@ static inline int cpu_of(struct rq *rq)
 }
 
 #ifdef CONFIG_SCHED_CORE
+#define SCHED_IDLE_ALLOWANCE	5000000 	/* 5 msec */
+
 DECLARE_STATIC_KEY_FALSE(__sched_core_enabled);
 
 static inline bool sched_core_enabled(struct rq *rq)
@@ -1016,6 +1019,7 @@ static inline raw_spinlock_t *rq_lockp(struct rq *rq)
 
 extern void queue_core_balance(struct rq *rq);
 extern bool prio_less_fair(struct task_struct *a, struct task_struct *b);
+extern void  account_core_idletime(struct task_struct *p, u64 exec);
 
 #else /* !CONFIG_SCHED_CORE */
 
