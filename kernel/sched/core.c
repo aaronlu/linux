@@ -3874,7 +3874,7 @@ out:
 		WARN_ON_ONCE(!rq_i->core_pick);
 
 		if (is_idle_task(rq_i->core_pick) && rq_i->nr_running)
-			rq->core_forceidle = true;
+			rq_i->core_forceidle = true;
 
 		rq_i->core_pick->core_occupation = occ;
 
